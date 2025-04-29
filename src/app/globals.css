@@ -2,6 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Leaflet CSS import */
+@import "leaflet/dist/leaflet.css";
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
 }
@@ -87,16 +90,31 @@ body {
   }
 }
 
-/* Leaflet CSS import */
-@import "leaflet/dist/leaflet.css";
 
-/* Fix Leaflet icon paths */
+/* Fix Leaflet icon paths and styles */
 .leaflet-popup-content-wrapper,
 .leaflet-popup-tip {
-    background: white;
+    background: white; /* Use CSS variable for background if theme support needed */
     box-shadow: 0 3px 14px rgba(0,0,0,0.4);
+    @apply bg-popover text-popover-foreground; /* Apply theme colors */
 }
 .leaflet-marker-icon {
-  background: none;
-  border: none;
+  background: none !important; /* Ensure override */
+  border: none !important; /* Ensure override */
+}
+
+.leaflet-popup-close-button {
+    color: #333 !important; /* Ensure high contrast or use theme color */
+    @apply text-foreground; /* Apply theme color */
+}
+
+.leaflet-tooltip {
+    @apply bg-popover text-popover-foreground border border-border rounded-md shadow-md px-2 py-1 text-xs;
+}
+
+.leaflet-tooltip-top:before,
+.leaflet-tooltip-bottom:before,
+.leaflet-tooltip-left:before,
+.leaflet-tooltip-right:before {
+    border: none !important; /* Remove default arrow or style it */
 }

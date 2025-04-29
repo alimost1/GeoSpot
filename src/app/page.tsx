@@ -9,13 +9,14 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { MapPin, Search, Users, Landmark as LandmarkIcon, UserPlus, UserCheck } from 'lucide-react';
+import { MapPin, Search, Users, Landmark as LandmarkIcon, UserPlus, UserCheck, X } from 'lucide-react'; // Import X
 import type { Landmark } from '@/services/wikipedia';
 import { getLandmarks } from '@/services/wikipedia';
 import { summarizeLandmarkInfo } from '@/ai/flows/summarize-landmark-info';
 import { useToast } from '@/hooks/use-toast';
 import type { LatLngExpression } from 'leaflet';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import type { User } from '@/types'; // Import User type
 
 
 // Dynamically import MapDisplay to avoid SSR issues with Leaflet
@@ -23,15 +24,7 @@ const MapDisplay = dynamic(() => import('@/components/MapDisplay'), {
   ssr: false,
 });
 
-// Mock user data
-interface User {
-  id: string;
-  name: string;
-  avatar: string;
-  location: LatLngExpression;
-  following: boolean;
-}
-
+// Mock user data using User type
 const mockUsers: User[] = [
   { id: '1', name: 'Alice', avatar: 'https://picsum.photos/seed/alice/40/40', location: [48.8584, 2.2945], following: false }, // Near Eiffel Tower
   { id: '2', name: 'Bob', avatar: 'https://picsum.photos/seed/bob/40/40', location: [48.8606, 2.3376], following: true }, // Near Louvre
@@ -58,6 +51,8 @@ export default function Home() {
 
   const fetchLandmarks = async (center: LatLngExpression) => {
     setIsLoadingLandmarks(true);
+    setLandmarks([]); // Clear previous landmarks while loading
+    setLandmarkSummaries({}); // Clear summaries
     try {
       // Convert LatLngExpression to Location object
       const location = Array.isArray(center)
@@ -82,22 +77,27 @@ export default function Home() {
 
  const fetchSummaries = async (landmarksToSummarize: Landmark[]) => {
     const summaries: Record<string, string> = {};
-    for (const landmark of landmarksToSummarize) {
-      if (!landmarkSummaries[landmark.title]) { // Only fetch if summary doesn't exist
-        try {
-          const result = await summarizeLandmarkInfo({
-            title: landmark.title,
-            description: landmark.description,
-            wikipediaUrl: landmark.wikipediaUrl,
-          });
-          summaries[landmark.title] = result.summary;
-        } catch (error) {
-          console.error(`Error summarizing landmark ${landmark.title}:`, error);
-          // Optionally add a placeholder or error message for this specific landmark
-          summaries[landmark.title] = "Could not load summary.";
-        }
-      }
-    }
+     const fetchPromises = landmarksToSummarize.map(async (landmark) => {
+       if (!landmarkSummaries[landmark.title]) { // Only fetch if summary doesn't exist
+         try {
+           const result = await summarizeLandmarkInfo({
+             title: landmark.title,
+             description: landmark.description,
+             wikipediaUrl: landmark.wikipediaUrl,
+           });
+           summaries[landmark.title] = result.summary;
+         } catch (error) {
+           console.error(`Error summarizing landmark ${landmark.title}:`, error);
+           // Optionally add a placeholder or error message for this specific landmark
+           summaries[landmark.title] = "Summary unavailable.";
+         }
+       } else {
+         // Use existing summary if available
+         summaries[landmark.title] = landmarkSummaries[landmark.title];
+       }
+     });
+
+     await Promise.all(fetchPromises); // Wait for all summaries to be fetched/retrieved
      setLandmarkSummaries(prev => ({ ...prev, ...summaries }));
   };
 
@@ -141,18 +141,22 @@ export default function Home() {
      if ('location' in item) { // It's a User
        setSelectedUser(item);
        setSelectedLandmark(null);
+       // Optionally center map on clicked user
+       setMapCenter(item.location);
      } else { // It's a Landmark
        setSelectedLandmark(item);
        setSelectedUser(null);
+       // Optionally center map on clicked landmark if coords exist
+        if (item.lat && item.lng) {
+            setMapCenter([item.lat, item.lng]);
+        }
      }
-     // Optionally, center map on clicked item
-     // setMapCenter('location' in item ? item.location : mapCenter); // Need lat/lng for landmarks from API
    };
 
   return (
     <div className="flex h-screen w-screen bg-background text-foreground relative overflow-hidden">
       {/* Sidebar */}
-      <aside className="w-80 border-r border-border flex flex-col h-full absolute left-0 top-0 z-10 bg-background shadow-lg transition-transform duration-300 ease-in-out transform translate-x-0">
+      <aside className="w-80 border-r border-border flex flex-col h-full absolute left-0 top-0 z-10 bg-card shadow-lg transition-transform duration-300 ease-in-out transform translate-x-0">
         <div className="p-4 flex items-center justify-between border-b border-border">
           <h1 className="text-2xl font-bold text-primary flex items-center">
             <MapPin className="mr-2 h-6 w-6" />
@@ -202,7 +206,8 @@ export default function Home() {
               <Search className="mr-2 h-4 w-4" />
               {isLoadingLandmarks ? 'Loading...' : 'Find Nearby Landmarks'}
             </Button>
-            {landmarks.length > 0 && (
+            {isLoadingLandmarks && <p className="text-sm text-muted-foreground text-center py-2">Loading landmarks...</p>}
+            {!isLoadingLandmarks && landmarks.length > 0 && (
               <Card className="shadow-sm">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base font-medium">Nearby Landmarks</CardTitle>
@@ -219,7 +224,7 @@ export default function Home() {
                          <div>
                            <p className="font-medium text-sm">{landmark.title}</p>
                            <p className="text-xs text-muted-foreground">
-                             {landmarkSummaries[landmark.title] || landmark.description.substring(0, 50) + '...'}
+                             {landmarkSummaries[landmark.title] || (landmark.description ? landmark.description.substring(0, 50) + '...' : 'No description available.')}
                             </p>
                          </div>
                       </li>
@@ -228,15 +233,18 @@ export default function Home() {
                 </CardContent>
               </Card>
             )}
+             {!isLoadingLandmarks && landmarks.length === 0 && (
+                 <p className="text-sm text-muted-foreground text-center py-2">No landmarks found nearby.</p>
+             )}
           </div>
 
            <Separator className="my-4" />
 
 
-          {/* Following Users */}
+          {/* Connections */}
           <div className="p-4">
             <h2 className="text-lg font-semibold mb-2 flex items-center"><Users className="mr-2 h-5 w-5" /> Connections</h2>
-             <Card className="shadow-sm">
+             <Card className="shadow-sm mb-4">
                <CardHeader className="pb-2">
                  <CardTitle className="text-base font-medium">Following</CardTitle>
                </CardHeader>
@@ -271,7 +279,7 @@ export default function Home() {
                    </ul>
                </CardContent>
              </Card>
-             <Separator className="my-4" />
+             {/* <Separator className="my-4" /> */}
              <Card className="shadow-sm">
                 <CardHeader className="pb-2">
                  <CardTitle className="text-base font-medium">Suggestions</CardTitle>
@@ -312,7 +320,7 @@ export default function Home() {
       </aside>
 
       {/* Main Content Area - Map */}
-      <main className="flex-1 h-full pl-80">
+      <main className="flex-1 h-full pl-80"> {/* Add padding to offset the fixed sidebar */}
          <MapDisplay
            center={mapCenter}
            users={users}
@@ -327,10 +335,10 @@ export default function Home() {
 
        {/* Selected Item Overlay Card - Animated */}
        {(selectedUser || selectedLandmark) && (
-         <Card className="absolute bottom-4 right-4 w-80 z-20 shadow-xl transition-all duration-300 ease-in-out animate-in fade-in slide-in-from-bottom-10">
+         <Card className="absolute bottom-4 right-4 w-80 z-20 shadow-xl transition-all duration-300 ease-in-out animate-in fade-in slide-in-from-bottom-5">
            <CardHeader className="flex flex-row items-start justify-between pb-2">
-              <div>
-                <CardTitle className="text-lg font-semibold">
+              <div className="flex-1 pr-2"> {/* Allow title to wrap */}
+                <CardTitle className="text-lg font-semibold leading-tight">
                   {selectedUser?.name || selectedLandmark?.title}
                 </CardTitle>
                 {selectedLandmark && (
@@ -338,14 +346,15 @@ export default function Home() {
                      href={selectedLandmark.wikipediaUrl}
                      target="_blank"
                      rel="noopener noreferrer"
-                     className="text-xs text-primary hover:underline"
+                     className="text-xs text-primary hover:underline block mt-1" // Block for better spacing
                    >
                      View on Wikipedia
                    </a>
                 )}
               </div>
-              <Button variant="ghost" size="icon" className="h-6 w-6 -mt-1 -mr-1" onClick={() => { setSelectedUser(null); setSelectedLandmark(null); }}>
+              <Button variant="ghost" size="icon" className="h-6 w-6 -mt-1 -mr-1 flex-shrink-0" onClick={() => { setSelectedUser(null); setSelectedLandmark(null); }}>
                  <X className="h-4 w-4" />
+                 <span className="sr-only">Close</span>
              </Button>
            </CardHeader>
            <CardContent>
@@ -367,7 +376,7 @@ export default function Home() {
              )}
              {selectedLandmark && (
                <p className="text-sm text-muted-foreground">
-                  {landmarkSummaries[selectedLandmark.title] || selectedLandmark.description}
+                  {landmarkSummaries[selectedLandmark.title] || (selectedLandmark.description ? selectedLandmark.description : 'No description available.')}
                 </p>
               )}
            </CardContent>

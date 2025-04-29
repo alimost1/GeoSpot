@@ -4,12 +4,13 @@
 import React, { useEffect, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMapEvents, Tooltip } from 'react-leaflet';
 import L, { type LatLngExpression, type LatLngTuple, type Map } from 'leaflet';
-import { User, Landmark as LandmarkType } from '@/types'; // Assuming types are defined here
+import type { User, Landmark as LandmarkType } from '@/types';
 import { Landmark, User as UserIcon } from 'lucide-react';
 import ReactDOMServer from 'react-dom/server';
+import { Button } from '@/components/ui/button'; // Import Button for popup actions if needed
 
 // Custom User Icon
-const userIconSvg = ReactDOMServer.renderToString(<UserIcon size={24} color="#4db6ac" />); // Teal color
+const userIconSvg = ReactDOMServer.renderToString(<UserIcon size={24} color="hsl(var(--primary))" />); // Use theme color
 const userIcon = L.divIcon({
   html: userIconSvg,
   className: 'bg-transparent border-none',
@@ -18,8 +19,8 @@ const userIcon = L.divIcon({
   popupAnchor: [0, -24] // Point from which the popup should open relative to the iconAnchor
 });
 
-// Custom Landmark Icon
-const landmarkIconSvg = ReactDOMServer.renderToString(<Landmark size={24} color="#f59e0b" />); // Amber color
+// Custom Landmark Icon (Example using a different color)
+const landmarkIconSvg = ReactDOMServer.renderToString(<Landmark size={24} color="hsl(var(--chart-3))" />); // Example: Orange from theme
 const landmarkIcon = L.divIcon({
   html: landmarkIconSvg,
   className: 'bg-transparent border-none',
@@ -36,17 +37,26 @@ interface MapDisplayProps {
   onMarkerClick: (item: User | LandmarkType) => void;
   selectedUser: User | null;
   selectedLandmark: LandmarkType | null;
-  landmarkSummaries: Record<string, string>; // Add this prop
+  landmarkSummaries: Record<string, string>;
 }
 
 const MapEvents = ({ onMove, mapRef }: { onMove: (center: LatLngExpression) => void, mapRef: React.RefObject<Map | null> }) => {
   const map = useMapEvents({
     moveend: () => {
-      onMove(map.getCenter());
+      if (mapRef.current) { // Ensure mapRef is current
+         onMove(mapRef.current.getCenter());
+      }
     },
+     load: () => { // Ensure mapRef is set on load
+       if (mapRef) {
+         // @ts-ignore
+         mapRef.current = map;
+       }
+     }
   });
-  if (mapRef) {
-     // @ts-ignore Types might mismatch slightly, but it works
+  // Ensure mapRef is updated if the map instance changes
+  if (mapRef && mapRef.current !== map) {
+     // @ts-ignore
     mapRef.current = map;
   }
   return null;
@@ -65,10 +75,15 @@ const MapDisplay: React.FC<MapDisplayProps> = ({
   const mapRef = useRef<Map | null>(null);
 
   useEffect(() => {
-    if (mapRef.current) {
-      mapRef.current.setView(center);
+    // Check if mapRef is current and center is valid before setting view
+    if (mapRef.current && center && typeof center !== 'string' && (Array.isArray(center) || ('lat' in center && 'lng' in center))) {
+       try {
+         mapRef.current.setView(center);
+       } catch (error) {
+         console.error("Error setting map view:", error, "Center:", center);
+       }
     }
-  }, [center]); // Re-center map when center prop changes
+  }, [center]);
 
 
   // Determine the marker to focus on
@@ -79,22 +94,24 @@ const MapDisplay: React.FC<MapDisplayProps> = ({
 
       if (selectedUser) {
         targetLatLng = selectedUser.location;
-      } else if (selectedLandmark) {
-        // We need coordinates for landmarks. Assuming they are not available in the LandmarkType for now.
-        // If landmarks had coordinates, you'd use them here:
-        // targetLatLng = [selectedLandmark.lat, selectedLandmark.lng];
-        // For now, we can't automatically fly to a landmark without coordinates.
+      } else if (selectedLandmark && selectedLandmark.lat && selectedLandmark.lng) {
+        // Use landmark coordinates if available
+        targetLatLng = [selectedLandmark.lat, selectedLandmark.lng];
       }
 
       if (targetLatLng) {
-        mapRef.current.flyTo(targetLatLng, mapRef.current.getZoom()); // Fly to the location
+         try {
+           mapRef.current.flyTo(targetLatLng, mapRef.current.getZoom() < 15 ? 15 : mapRef.current.getZoom()); // Fly to the location, zoom in if needed
+         } catch (error) {
+           console.error("Error flying to location:", error, "Target:", targetLatLng);
+         }
       }
     }
   }, [selectedUser, selectedLandmark]);
 
 
   return (
-    <MapContainer center={center} zoom={13} style={{ height: '100%', width: '100%' }} ref={mapRef}>
+    <MapContainer center={center} zoom={13} style={{ height: '100%', width: '100%' }} whenCreated={mapInstance => { mapRef.current = mapInstance; }}>
       <TileLayer
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -104,60 +121,53 @@ const MapDisplay: React.FC<MapDisplayProps> = ({
       {/* User Markers */}
       {users.map((user) => (
         <Marker
-          key={user.id}
+          key={`user-${user.id}`} // Add prefix for clarity
           position={user.location}
           icon={userIcon}
           eventHandlers={{
             click: () => onMarkerClick(user),
           }}
         >
-          <Tooltip direction="top" offset={[0, -20]}>
+          <Tooltip direction="top" offset={[0, -24]}>
             {user.name}
           </Tooltip>
-          {/* Optional: Add Popup for more details if needed later
+          {/* Keep Popup commented out unless needed
            <Popup>
              <div>
                <h3>{user.name}</h3>
-               <p>Some details about the user.</p>
+               <Button size="sm" onClick={() => console.log('Follow clicked from popup')}>Follow</Button>
              </div>
            </Popup>
-          */}
+           */}
         </Marker>
       ))}
 
-      {/* Landmark Markers - Assuming landmarks don't have coordinates yet */}
-      {landmarks.map((landmark) => {
-          // Placeholder: If landmarks had lat/lng, we'd use them.
-          // For now, we can't place them accurately.
-          // We could place them near the map center as a fallback, but that might be confusing.
-          // Example placeholder position (needs actual coordinates):
-          // const landmarkPosition: LatLngTuple = [landmark.lat ?? mapCenter.lat, landmark.lng ?? mapCenter.lng];
-          // For demo, let's skip rendering if no coords. In a real app, you'd fetch coords.
-          return null; // Remove this line if you add lat/lng to landmarks
-
-          /* Example if landmarks had coordinates:
-          const landmarkPosition = [landmark.lat, landmark.lng] as LatLngTuple;
+      {/* Landmark Markers */}
+      {landmarks.filter(landmark => landmark.lat && landmark.lng).map((landmark) => {
+          const landmarkPosition = [landmark.lat!, landmark.lng!] as LatLngTuple; // Assert non-null lat/lng
           return (
             <Marker
-              key={landmark.title}
+              key={`landmark-${landmark.title}`} // Add prefix
               position={landmarkPosition}
               icon={landmarkIcon}
               eventHandlers={{
                 click: () => onMarkerClick(landmark),
               }}
             >
-               <Tooltip direction="top" offset={[0, -20]}>
+               <Tooltip direction="top" offset={[0, -24]}>
                  {landmark.title}
                </Tooltip>
                <Popup>
-                <div>
-                    <h3 className="font-semibold">{landmark.title}</h3>
-                    <p className="text-xs text-muted-foreground mb-1">{landmarkSummaries[landmark.title] || landmark.description.substring(0, 100) + '...'}</p>
+                <div className="w-64"> {/* Set a max width for the popup */}
+                    <h3 className="font-semibold text-base mb-1">{landmark.title}</h3>
+                    <p className="text-xs text-muted-foreground mb-2">
+                       {landmarkSummaries[landmark.title] || landmark.description.substring(0, 150) + (landmark.description.length > 150 ? '...' : '')}
+                     </p>
                      <a
                          href={landmark.wikipediaUrl}
                          target="_blank"
                          rel="noopener noreferrer"
-                         className="text-xs text-primary hover:underline"
+                         className="text-xs text-primary hover:underline inline-block"
                      >
                          View on Wikipedia
                      </a>
@@ -165,7 +175,6 @@ const MapDisplay: React.FC<MapDisplayProps> = ({
                </Popup>
             </Marker>
            );
-          */
         })}
 
     </MapContainer>
@@ -173,5 +182,3 @@ const MapDisplay: React.FC<MapDisplayProps> = ({
 };
 
 export default MapDisplay;
-
-    
