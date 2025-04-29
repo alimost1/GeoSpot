@@ -95,9 +95,7 @@ body {
 /* Fix Leaflet icon paths and styles */
 .leaflet-popup-content-wrapper,
 .leaflet-popup-tip {
-    background: white; /* Use CSS variable for background if theme support needed */
-    box-shadow: 0 3px 14px rgba(0,0,0,0.4);
-    @apply bg-popover text-popover-foreground; /* Apply theme colors */
+    @apply bg-popover text-popover-foreground shadow-lg rounded-md;
 }
 .leaflet-marker-icon {
   background: none !important; /* Ensure override */
@@ -105,9 +103,16 @@ body {
 }
 
 .leaflet-popup-close-button {
-    color: #333 !important; /* Ensure high contrast or use theme color */
-    @apply text-foreground; /* Apply theme color */
+     @apply text-foreground opacity-70 hover:opacity-100;
+     /* Position adjustments might be needed depending on icon size/styling */
+     top: 6px !important;
+     right: 6px !important;
+     width: 20px !important;
+     height: 20px !important;
+     font-size: 16px !important;
+     line-height: 20px !important;
 }
+
 
 .leaflet-tooltip {
     @apply bg-popover text-popover-foreground border border-border rounded-md shadow-md px-2 py-1 text-xs;

@@ -1,13 +1,14 @@
 
 'use client';
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react'; // Import useState
 import { MapContainer, TileLayer, Marker, Popup, useMapEvents, Tooltip } from 'react-leaflet';
 import L, { type LatLngExpression, type LatLngTuple, type Map } from 'leaflet';
 import type { User, Landmark as LandmarkType } from '@/types';
 import { Landmark, User as UserIcon } from 'lucide-react';
 import ReactDOMServer from 'react-dom/server';
 import { Button } from '@/components/ui/button'; // Import Button for popup actions if needed
+import { Skeleton } from '@/components/ui/skeleton'; // Import Skeleton for placeholder
 
 // Custom User Icon
 const userIconSvg = ReactDOMServer.renderToString(<UserIcon size={24} color="hsl(var(--primary))" />); // Use theme color
@@ -43,21 +44,22 @@ interface MapDisplayProps {
 const MapEvents = ({ onMove, mapRef }: { onMove: (center: LatLngExpression) => void, mapRef: React.RefObject<Map | null> }) => {
   const map = useMapEvents({
     moveend: () => {
+      // Debounce or throttle this if it causes performance issues
       if (mapRef.current) { // Ensure mapRef is current
          onMove(mapRef.current.getCenter());
       }
     },
      load: () => { // Ensure mapRef is set on load
-       if (mapRef) {
-         // @ts-ignore
+       if (mapRef && mapRef.current === null) { // Only set if not already set
+         // @ts-ignore - leaflet typing might be strict here
          mapRef.current = map;
        }
      }
   });
   // Ensure mapRef is updated if the map instance changes
-  if (mapRef && mapRef.current !== map) {
-     // @ts-ignore
-    mapRef.current = map;
+  if (mapRef && mapRef.current !== map && mapRef.current === null) { // Only set if not already set
+      // @ts-ignore - leaflet typing might be strict here
+      mapRef.current = map;
   }
   return null;
 };
@@ -73,23 +75,38 @@ const MapDisplay: React.FC<MapDisplayProps> = ({
   landmarkSummaries,
 }) => {
   const mapRef = useRef<Map | null>(null);
+  const [isMounted, setIsMounted] = useState(false); // State to track mount
 
+  // Set mounted state after component mounts on the client
   useEffect(() => {
-    // Check if mapRef is current and center is valid before setting view
-    if (mapRef.current && center && typeof center !== 'string' && (Array.isArray(center) || ('lat' in center && 'lng' in center))) {
+    setIsMounted(true);
+    // Cleanup function to potentially destroy the map instance if needed
+    // return () => {
+    //   if (mapRef.current) {
+    //     mapRef.current.remove();
+    //     mapRef.current = null;
+    //   }
+    // };
+  }, []);
+
+  // Effect to update map view when center changes
+  useEffect(() => {
+    // Check if mapRef is current, component is mounted, and center is valid before setting view
+    if (isMounted && mapRef.current && center && typeof center !== 'string' && (Array.isArray(center) || ('lat' in center && 'lng' in center))) {
        try {
+         // Use flyTo for smoother transitions if needed, or setView for immediate change
          mapRef.current.setView(center);
        } catch (error) {
          console.error("Error setting map view:", error, "Center:", center);
        }
     }
-  }, [center]);
+  }, [center, isMounted]); // Add isMounted dependency
 
 
-  // Determine the marker to focus on
+  // Effect to fly to selected marker
   const focusedItem = selectedUser || selectedLandmark;
   useEffect(() => {
-    if (focusedItem && mapRef.current) {
+    if (isMounted && focusedItem && mapRef.current) {
       let targetLatLng: LatLngExpression | null = null;
 
       if (selectedUser) {
@@ -101,22 +118,42 @@ const MapDisplay: React.FC<MapDisplayProps> = ({
 
       if (targetLatLng) {
          try {
-           mapRef.current.flyTo(targetLatLng, mapRef.current.getZoom() < 15 ? 15 : mapRef.current.getZoom()); // Fly to the location, zoom in if needed
+           const currentZoom = mapRef.current.getZoom();
+           mapRef.current.flyTo(targetLatLng, currentZoom < 15 ? 15 : currentZoom, { duration: 0.5 }); // Fly to the location, zoom in if needed
          } catch (error) {
            console.error("Error flying to location:", error, "Target:", targetLatLng);
          }
       }
     }
-  }, [selectedUser, selectedLandmark]);
+  }, [selectedUser, selectedLandmark, isMounted]); // Add isMounted dependency
 
 
+  // Render placeholder if not mounted yet
+  if (!isMounted) {
+     return <Skeleton className="w-full h-full" />; // Or any other loading indicator
+  }
+
+  // Render MapContainer only when mounted
   return (
-    <MapContainer center={center} zoom={13} style={{ height: '100%', width: '100%' }} whenCreated={mapInstance => { mapRef.current = mapInstance; }}>
+    <MapContainer
+        center={center}
+        zoom={13}
+        style={{ height: '100%', width: '100%' }}
+        // Use ref prop instead of whenCreated for better React integration
+        ref={mapInstance => {
+             // Only assign ref if it's not already set to avoid re-initialization issues
+             if (mapInstance && mapRef.current === null) {
+                mapRef.current = mapInstance;
+             }
+         }}
+      >
       <TileLayer
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
       />
-      <MapEvents onMove={onMove} mapRef={mapRef} />
+       {/* Conditionally render MapEvents only when mapRef is ready */}
+       {mapRef && <MapEvents onMove={onMove} mapRef={mapRef} />}
+
 
       {/* User Markers */}
       {users.map((user) => (
@@ -131,14 +168,14 @@ const MapDisplay: React.FC<MapDisplayProps> = ({
           <Tooltip direction="top" offset={[0, -24]}>
             {user.name}
           </Tooltip>
-          {/* Keep Popup commented out unless needed
-           <Popup>
-             <div>
-               <h3>{user.name}</h3>
-               <Button size="sm" onClick={() => console.log('Follow clicked from popup')}>Follow</Button>
-             </div>
+           {/* Popup for user - example */}
+           <Popup minWidth={90}>
+              <div className="text-center">
+                 <h3 className="font-semibold text-sm mb-1">{user.name}</h3>
+                 {/* Add follow button or other actions here if needed */}
+                 {/* <Button size="sm" variant="outline">View Profile</Button> */}
+               </div>
            </Popup>
-           */}
         </Marker>
       ))}
 
@@ -158,16 +195,16 @@ const MapDisplay: React.FC<MapDisplayProps> = ({
                  {landmark.title}
                </Tooltip>
                <Popup>
-                <div className="w-64"> {/* Set a max width for the popup */}
+                <div className="w-64"> {/* Set a width for the popup */}
                     <h3 className="font-semibold text-base mb-1">{landmark.title}</h3>
-                    <p className="text-xs text-muted-foreground mb-2">
-                       {landmarkSummaries[landmark.title] || landmark.description.substring(0, 150) + (landmark.description.length > 150 ? '...' : '')}
+                    <p className="text-xs text-muted-foreground mb-2 leading-snug">
+                       {landmarkSummaries[landmark.title] || (landmark.description ? landmark.description.substring(0, 150) + (landmark.description.length > 150 ? '...' : '') : 'No description available.')}
                      </p>
                      <a
                          href={landmark.wikipediaUrl}
                          target="_blank"
                          rel="noopener noreferrer"
-                         className="text-xs text-primary hover:underline inline-block"
+                         className="text-xs text-primary hover:underline inline-block mt-1"
                      >
                          View on Wikipedia
                      </a>
