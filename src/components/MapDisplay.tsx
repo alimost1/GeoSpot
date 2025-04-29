@@ -45,20 +45,26 @@ interface MapDisplayProps {
 const MapEvents = ({ onMove, mapRef }: { onMove: (center: LatLngExpression) => void, mapRef: React.MutableRefObject<Map | null> }) => {
   const map = useMapEvents({
     moveend: () => {
-      onMove(map.getCenter());
+      // Check if map instance exists before accessing methods
+      if (map) {
+        onMove(map.getCenter());
+      }
     },
     load: () => {
         // Ensure mapRef is assigned only once when the map loads
-        if (mapRef.current === null) {
+        if (mapRef.current === null && map) {
            // @ts-ignore Type safety for Leaflet instance might differ slightly
            mapRef.current = map;
+           // console.log("Map instance assigned via load event:", mapRef.current);
         }
     }
   });
    // Backup assignment in case load event doesn't fire as expected in some scenarios
+   // This also handles cases where useMapEvents hook might re-run
    if (mapRef.current === null && map) {
       // @ts-ignore Type safety for Leaflet instance might differ slightly
       mapRef.current = map;
+      // console.log("Map instance assigned via backup:", mapRef.current);
    }
   return null;
 };
@@ -82,25 +88,37 @@ const MapDisplayComponent: React.FC<MapDisplayProps> = ({
   // Effect to handle client-side mounting
    useEffect(() => {
       setIsMounted(true);
+      // console.log("MapDisplay mounted");
       // Optional: Cleanup function if map instance needs manual destruction
       return () => {
+        // console.log("MapDisplay unmounting");
         // If mapRef.current exists and has a remove method, call it
         // This helps prevent memory leaks if the component unmounts unexpectedly
-        // Be cautious with this, as react-leaflet might handle cleanup internally
+        // This can be aggressive, ensure it doesn't cause issues with HMR or fast refresh
         // if (mapRef.current && typeof mapRef.current.remove === 'function') {
-        //   console.log("Removing map instance");
-        //   mapRef.current.remove();
-        //   mapRef.current = null;
+        //   console.log("Attempting to remove map instance");
+        //   try {
+        //      mapRef.current.remove();
+        //      mapRef.current = null;
+        //      console.log("Map instance removed");
+        //   } catch (e) {
+        //      console.error("Error removing map instance on unmount:", e);
+        //   }
         // }
-        // setIsMounted(false); // Reset mounted state on unmount
+         setIsMounted(false); // Reset mounted state on unmount
       };
     }, []);
 
 
   // Effect to update internal center state when the prop changes
    useEffect(() => {
-     setCurrentCenter(center);
-   }, [center]);
+     // Only update if the center prop *actually* differs from internal state
+     // This check might need refinement based on LatLngExpression structure comparison
+     if (JSON.stringify(center) !== JSON.stringify(currentCenter)) {
+        // console.log("Center prop changed, updating internal state:", center);
+        setCurrentCenter(center);
+     }
+   }, [center]); // Removed currentCenter from deps to avoid loop
 
 
   // Effect to programmatically update map view ONLY when internal center changes
@@ -108,13 +126,24 @@ const MapDisplayComponent: React.FC<MapDisplayProps> = ({
   useEffect(() => {
     if (isMounted && mapRef.current && currentCenter) {
         const currentMapCenter = mapRef.current.getCenter();
+        let centerLat: number, centerLng: number;
+        if (Array.isArray(currentCenter)) {
+            centerLat = currentCenter[0];
+            centerLng = currentCenter[1];
+        } else {
+            centerLat = currentCenter.lat;
+            centerLng = currentCenter.lng;
+        }
+
         // Check if centers are different enough to warrant a programmatic move
-        // This prevents loops where moving the map triggers this effect
+        // Added a small tolerance for floating point comparisons
+        const tolerance = 0.00001;
         if (
-          (Array.isArray(currentCenter) && (currentMapCenter.lat !== currentCenter[0] || currentMapCenter.lng !== currentCenter[1])) ||
-          (!Array.isArray(currentCenter) && (currentMapCenter.lat !== currentCenter.lat || currentMapCenter.lng !== currentCenter.lng))
+          Math.abs(currentMapCenter.lat - centerLat) > tolerance ||
+          Math.abs(currentMapCenter.lng - centerLng) > tolerance
         ) {
              try {
+                 // console.log("Programmatically setting map view to:", currentCenter);
                  mapRef.current.setView(currentCenter);
              } catch (error) {
                   console.error("Error setting map view:", error, "Center:", currentCenter);
@@ -139,34 +168,37 @@ const MapDisplayComponent: React.FC<MapDisplayProps> = ({
        if (targetLatLng) {
          try {
            const currentZoom = mapRef.current.getZoom();
+           // console.log(`Flying to ${selectedUser ? 'user' : 'landmark'}:`, targetLatLng);
            // Fly to the location, zoom in if map is zoomed out, maintain zoom otherwise
            mapRef.current.flyTo(targetLatLng, Math.max(currentZoom, 15), { duration: 0.5 });
-           setCurrentCenter(targetLatLng); // Update internal center as well
+           // Optionally update internal center after flying
+           // setCurrentCenter(targetLatLng); // Be cautious: might trigger the setView effect
          } catch (error) {
            console.error("Error flying to location:", error, "Target:", targetLatLng);
          }
        }
      }
-   }, [selectedUser, selectedLandmark, isMounted]); // Removed currentCenter dependency
+   }, [selectedUser, selectedLandmark, isMounted]); // Keep dependencies tight
 
 
   // Render placeholder if not mounted yet
   if (!isMounted) {
+    // console.log("Rendering Skeleton (not mounted)");
      return <Skeleton className="w-full h-full" />;
   }
 
 
   // Render MapContainer only when mounted
-  // Using a key derived from a stable property or just `isMounted` can help force remount if needed, but often isn't necessary.
-  // Avoid using `center` directly as key if it changes frequently from parent.
+  // Removed the key prop as it might cause remount/re-initialization issues.
+  // Let React manage the component lifecycle based on its position in the tree.
+  // console.log("Rendering MapContainer with center:", currentCenter);
   return (
      <MapContainer
-         key={String(isMounted)} // Use isMounted as key to potentially help React differentiate
+         // key={String(isMounted)} // REMOVED: Avoid forcing remount with key
          center={currentCenter} // Use internal state for center
          zoom={13}
          style={{ height: '100%', width: '100%' }}
-         // Remove the ref prop here, let MapEvents handle it via useMapEvents hook
-         // ref={mapInstance => { ... }} // REMOVED
+         // Do not use whenCreated/whenReady here; MapEvents handles instance assignment
        >
        <TileLayer
          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
