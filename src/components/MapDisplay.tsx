@@ -41,31 +41,34 @@ interface MapDisplayProps {
   landmarkSummaries: Record<string, string>;
 }
 
-// MapEvents component to handle map interactions
-const MapEvents = ({ onMove, mapRef }: { onMove: (center: LatLngExpression) => void, mapRef: React.MutableRefObject<Map | null> }) => {
+// MapEvents component to handle map interactions and instance assignment
+const MapEvents = ({ onMove, setMapInstance }: { onMove: (center: LatLngExpression) => void, setMapInstance: (map: Map | null) => void }) => {
   const map = useMapEvents({
     moveend: () => {
-      // Check if map instance exists before accessing methods
       if (map) {
         onMove(map.getCenter());
       }
     },
-    load: () => {
-        // Ensure mapRef is assigned only once when the map loads
-        if (mapRef.current === null && map) {
-           // @ts-ignore Type safety for Leaflet instance might differ slightly
-           mapRef.current = map;
-           // console.log("Map instance assigned via load event:", mapRef.current);
+    load: () => { // Assign map instance on load
+        if (map) {
+            setMapInstance(map);
+            // console.log("Map instance assigned via load event:", map);
         }
     }
   });
-   // Backup assignment in case load event doesn't fire as expected in some scenarios
-   // This also handles cases where useMapEvents hook might re-run
-   if (mapRef.current === null && map) {
-      // @ts-ignore Type safety for Leaflet instance might differ slightly
-      mapRef.current = map;
-      // console.log("Map instance assigned via backup:", mapRef.current);
-   }
+
+  // Effect to handle unmount cleanup within MapEvents if needed,
+  // though the main component's cleanup should suffice.
+  // Also handles the case where the component might render before the map is fully loaded.
+  useEffect(() => {
+      if (map) {
+        setMapInstance(map);
+        // console.log("Map instance (re)assigned via useEffect:", map);
+      }
+      // No specific cleanup needed here as the main component handles map.remove()
+  }, [map, setMapInstance]);
+
+
   return null;
 };
 
@@ -81,189 +84,207 @@ const MapDisplayComponent: React.FC<MapDisplayProps> = ({
   landmarkSummaries,
 }) => {
   const mapRef = useRef<Map | null>(null);
+  const mapContainerRef = useRef<HTMLDivElement | null>(null); // Ref for the map container div
   const [isMounted, setIsMounted] = useState(false);
-  const [currentCenter, setCurrentCenter] = useState<LatLngExpression>(center); // Internal state for center
+  // Internal state for center to avoid direct mutation or loops if parent state changes rapidly
+  const [currentCenter, setCurrentCenter] = useState<LatLngExpression>(center);
 
-
-  // Effect to handle client-side mounting
-   useEffect(() => {
-      setIsMounted(true);
-      // console.log("MapDisplay mounted");
-      // Optional: Cleanup function if map instance needs manual destruction
-      return () => {
-        // console.log("MapDisplay unmounting");
-        // If mapRef.current exists and has a remove method, call it
-        // This helps prevent memory leaks if the component unmounts unexpectedly
-        // This can be aggressive, ensure it doesn't cause issues with HMR or fast refresh
-        // if (mapRef.current && typeof mapRef.current.remove === 'function') {
-        //   console.log("Attempting to remove map instance");
-        //   try {
-        //      mapRef.current.remove();
-        //      mapRef.current = null;
-        //      console.log("Map instance removed");
-        //   } catch (e) {
-        //      console.error("Error removing map instance on unmount:", e);
-        //   }
-        // }
-         setIsMounted(false); // Reset mounted state on unmount
-      };
-    }, []);
-
-
-  // Effect to update internal center state when the prop changes
-   useEffect(() => {
-     // Only update if the center prop *actually* differs from internal state
-     // This check might need refinement based on LatLngExpression structure comparison
-     if (JSON.stringify(center) !== JSON.stringify(currentCenter)) {
-        // console.log("Center prop changed, updating internal state:", center);
-        setCurrentCenter(center);
+  // Callback to set the map instance from MapEvents
+  const setMapInstance = (map: Map | null) => {
+     if (!mapRef.current && map) {
+          // console.log("Setting map instance ref");
+          mapRef.current = map;
+     } else if (mapRef.current && !map) {
+          // console.log("Clearing map instance ref");
+          mapRef.current = null;
      }
-   }, [center]); // Removed currentCenter from deps to avoid loop
+   };
 
+  // Effect to handle client-side mounting and cleanup
+  useEffect(() => {
+    setIsMounted(true);
+    // console.log("MapDisplay mounted");
 
-  // Effect to programmatically update map view ONLY when internal center changes
-  // This avoids conflicts with user interactions moving the map.
+    // Cleanup function: VERY IMPORTANT for Leaflet and preventing init errors
+    return () => {
+      // console.log("MapDisplay unmounting");
+      if (mapRef.current) {
+        // Check if it's a valid Leaflet map instance with a remove method
+        if (typeof mapRef.current.remove === 'function') {
+          // console.log("Attempting to remove map instance");
+          try {
+            mapRef.current.remove();
+            // console.log("Map instance removed successfully");
+          } catch (e) {
+            console.error("Error removing map instance on unmount:", e);
+          }
+        } else {
+          console.warn("mapRef.current exists but does not have a remove method.");
+        }
+        // Explicitly set ref to null after removal
+        mapRef.current = null;
+      }
+      setIsMounted(false); // Reset mounted state on unmount
+    };
+  }, []); // Empty dependency array: runs only on mount and unmount
+
+  // Effect to update internal center state ONLY when the center prop *actually* changes
+  useEffect(() => {
+    // Basic comparison, might need deep comparison for complex LatLngExpression objects
+    if (JSON.stringify(center) !== JSON.stringify(currentCenter)) {
+      // console.log("Center prop changed, updating internal state:", center);
+      setCurrentCenter(center);
+    }
+  }, [center]); // Depend only on the center prop
+
+  // Effect to programmatically move the map ONLY when internal center changes
+  // This avoids conflicts with user pan/zoom actions.
   useEffect(() => {
     if (isMounted && mapRef.current && currentCenter) {
         const currentMapCenter = mapRef.current.getCenter();
-        let centerLat: number, centerLng: number;
+        let targetLat: number, targetLng: number;
+
         if (Array.isArray(currentCenter)) {
-            centerLat = currentCenter[0];
-            centerLng = currentCenter[1];
+            [targetLat, targetLng] = currentCenter;
         } else {
-            centerLat = currentCenter.lat;
-            centerLng = currentCenter.lng;
+            targetLat = currentCenter.lat;
+            targetLng = currentCenter.lng;
         }
 
         // Check if centers are different enough to warrant a programmatic move
-        // Added a small tolerance for floating point comparisons
-        const tolerance = 0.00001;
+        const tolerance = 0.00001; // Small tolerance for float comparison
         if (
-          Math.abs(currentMapCenter.lat - centerLat) > tolerance ||
-          Math.abs(currentMapCenter.lng - centerLng) > tolerance
+          Math.abs(currentMapCenter.lat - targetLat) > tolerance ||
+          Math.abs(currentMapCenter.lng - targetLng) > tolerance
         ) {
-             try {
-                 // console.log("Programmatically setting map view to:", currentCenter);
-                 mapRef.current.setView(currentCenter);
-             } catch (error) {
-                  console.error("Error setting map view:", error, "Center:", currentCenter);
-             }
+            try {
+                // console.log("Programmatically setting map view to:", currentCenter);
+                mapRef.current.setView(currentCenter); // Use setView for immediate change without animation
+            } catch (error) {
+                console.error("Error setting map view:", error, "Center:", currentCenter);
+            }
         }
     }
-  }, [currentCenter, isMounted]); // Depend only on internal center and mounted state
+    // Depend on internal center and mount status. Also mapRef.current to ensure map is ready.
+  }, [currentCenter, isMounted, mapRef.current]);
 
 
   // Effect to fly to selected marker
-   const focusedItem = selectedUser || selectedLandmark;
-   useEffect(() => {
-     if (isMounted && focusedItem && mapRef.current) {
-       let targetLatLng: LatLngExpression | null = null;
+  useEffect(() => {
+    const focusedItem = selectedUser || selectedLandmark;
+    if (isMounted && focusedItem && mapRef.current) {
+      let targetLatLng: LatLngExpression | null = null;
 
-       if (selectedUser) {
-         targetLatLng = selectedUser.location;
-       } else if (selectedLandmark && selectedLandmark.lat && selectedLandmark.lng) {
-         targetLatLng = [selectedLandmark.lat, selectedLandmark.lng];
-       }
+      if (selectedUser) {
+        targetLatLng = selectedUser.location;
+      } else if (selectedLandmark && selectedLandmark.lat && selectedLandmark.lng) {
+        targetLatLng = [selectedLandmark.lat, selectedLandmark.lng];
+      }
 
-       if (targetLatLng) {
-         try {
-           const currentZoom = mapRef.current.getZoom();
-           // console.log(`Flying to ${selectedUser ? 'user' : 'landmark'}:`, targetLatLng);
-           // Fly to the location, zoom in if map is zoomed out, maintain zoom otherwise
-           mapRef.current.flyTo(targetLatLng, Math.max(currentZoom, 15), { duration: 0.5 });
-           // Optionally update internal center after flying
-           // setCurrentCenter(targetLatLng); // Be cautious: might trigger the setView effect
-         } catch (error) {
-           console.error("Error flying to location:", error, "Target:", targetLatLng);
-         }
-       }
-     }
-   }, [selectedUser, selectedLandmark, isMounted]); // Keep dependencies tight
+      if (targetLatLng) {
+        try {
+          const currentZoom = mapRef.current.getZoom();
+          // console.log(`Flying to ${selectedUser ? 'user' : 'landmark'}:`, targetLatLng);
+          mapRef.current.flyTo(targetLatLng, Math.max(currentZoom, 15), { duration: 0.5 });
+          // Optionally update internal center AFTER flying if needed, but be cautious of loops
+          // setCurrentCenter(targetLatLng);
+        } catch (error) {
+          console.error("Error flying to location:", error, "Target:", targetLatLng);
+        }
+      }
+    }
+  }, [selectedUser, selectedLandmark, isMounted, mapRef.current]); // Add mapRef.current dependency
 
 
   // Render placeholder if not mounted yet
   if (!isMounted) {
     // console.log("Rendering Skeleton (not mounted)");
-     return <Skeleton className="w-full h-full" />;
+    // Use a div with the ref for the MapContainer to attach to later
+    return <div ref={mapContainerRef} className="w-full h-full"><Skeleton className="w-full h-full" /></div>;
   }
 
 
-  // Render MapContainer only when mounted
-  // Removed the key prop as it might cause remount/re-initialization issues.
-  // Let React manage the component lifecycle based on its position in the tree.
-  // console.log("Rendering MapContainer with center:", currentCenter);
+  // Render MapContainer only when mounted. Attach ref to the container div.
+  // MapContainer needs a defined container element.
+  // console.log("Rendering MapContainer with internal center:", currentCenter);
   return (
-     <MapContainer
-         // key={String(isMounted)} // REMOVED: Avoid forcing remount with key
-         center={currentCenter} // Use internal state for center
-         zoom={13}
-         style={{ height: '100%', width: '100%' }}
-         // Do not use whenCreated/whenReady here; MapEvents handles instance assignment
-       >
-       <TileLayer
-         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-       />
-        {/* MapEvents component handles map instance and events */}
-        <MapEvents onMove={onMove} mapRef={mapRef} />
+     <div ref={mapContainerRef} style={{ height: '100%', width: '100%' }}>
+         {/* Conditionally render MapContainer only when the container div is available */}
+         {mapContainerRef.current && (
+             <MapContainer
+                 // Do NOT use whenCreated/whenReady here as MapEvents handles instance assignment via hooks
+                 center={currentCenter} // Use internal state for initial center
+                 zoom={13}
+                 style={{ height: '100%', width: '100%' }}
+                 // Assign the container explicitly (though often not needed if direct child)
+                 // container={mapContainerRef.current} // This prop doesn't exist on MapContainer
+               >
+               <TileLayer
+                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+               />
+                {/* MapEvents component handles map instance and events */}
+                <MapEvents onMove={onMove} setMapInstance={setMapInstance} />
 
-       {/* User Markers */}
-       {users.map((user) => (
-         <Marker
-           key={`user-${user.id}`}
-           position={user.location}
-           icon={userIcon}
-           eventHandlers={{
-             click: () => onMarkerClick(user),
-           }}
-         >
-           <Tooltip direction="top" offset={[0, -24]}>
-             {user.name}
-           </Tooltip>
-           <Popup minWidth={90}>
-               <div className="text-center">
-                  <h3 className="font-semibold text-sm mb-1">{user.name}</h3>
-                </div>
-            </Popup>
-         </Marker>
-       ))}
+               {/* User Markers */}
+               {users.map((user) => (
+                 <Marker
+                   key={`user-${user.id}`}
+                   position={user.location}
+                   icon={userIcon}
+                   eventHandlers={{
+                     click: () => onMarkerClick(user),
+                   }}
+                 >
+                   <Tooltip direction="top" offset={[0, -24]}>
+                     {user.name}
+                   </Tooltip>
+                   <Popup minWidth={90}>
+                       <div className="text-center">
+                          <h3 className="font-semibold text-sm mb-1">{user.name}</h3>
+                        </div>
+                    </Popup>
+                 </Marker>
+               ))}
 
-       {/* Landmark Markers */}
-       {landmarks.filter(landmark => landmark.lat && landmark.lng).map((landmark) => {
-           const landmarkPosition = [landmark.lat!, landmark.lng!] as LatLngTuple;
-           return (
-             <Marker
-               key={`landmark-${landmark.title}`}
-               position={landmarkPosition}
-               icon={landmarkIcon}
-               eventHandlers={{
-                 click: () => onMarkerClick(landmark),
-               }}
-             >
-                <Tooltip direction="top" offset={[0, -24]}>
-                  {landmark.title}
-                </Tooltip>
-                <Popup>
-                 <div className="w-64">
-                     <h3 className="font-semibold text-base mb-1">{landmark.title}</h3>
-                     <p className="text-xs text-muted-foreground mb-2 leading-snug">
-                        {landmarkSummaries[landmark.title] || (landmark.description ? landmark.description.substring(0, 150) + (landmark.description.length > 150 ? '...' : '') : 'No description available.')}
-                      </p>
-                      <a
-                          href={landmark.wikipediaUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-xs text-primary hover:underline inline-block mt-1"
-                      >
-                          View on Wikipedia
-                      </a>
-                  </div>
-                </Popup>
-             </Marker>
-            );
-         })}
+               {/* Landmark Markers */}
+               {landmarks.filter(landmark => landmark.lat && landmark.lng).map((landmark) => {
+                   const landmarkPosition = [landmark.lat!, landmark.lng!] as LatLngTuple;
+                   return (
+                     <Marker
+                       key={`landmark-${landmark.title}`}
+                       position={landmarkPosition}
+                       icon={landmarkIcon}
+                       eventHandlers={{
+                         click: () => onMarkerClick(landmark),
+                       }}
+                     >
+                        <Tooltip direction="top" offset={[0, -24]}>
+                          {landmark.title}
+                        </Tooltip>
+                        <Popup>
+                         <div className="w-64">
+                             <h3 className="font-semibold text-base mb-1">{landmark.title}</h3>
+                             <p className="text-xs text-muted-foreground mb-2 leading-snug">
+                                {landmarkSummaries[landmark.title] || (landmark.description ? landmark.description.substring(0, 150) + (landmark.description.length > 150 ? '...' : '') : 'No description available.')}
+                              </p>
+                              <a
+                                  href={landmark.wikipediaUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-xs text-primary hover:underline inline-block mt-1"
+                              >
+                                  View on Wikipedia
+                              </a>
+                          </div>
+                        </Popup>
+                     </Marker>
+                    );
+                 })}
 
-     </MapContainer>
+             </MapContainer>
+         )}
+     </div>
    );
  };
 
@@ -272,3 +293,4 @@ const MapDisplayComponent: React.FC<MapDisplayProps> = ({
  MapDisplay.displayName = 'MapDisplay'; // Set display name for React DevTools
 
  export default MapDisplay;
+
