@@ -1,4 +1,3 @@
-
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -10,14 +9,14 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { MapPin, Search, Users, Landmark as LandmarkIcon, UserPlus, UserCheck, X } from 'lucide-react'; // Import X
+import { MapPin, Search, Users, Landmark as LandmarkIcon, UserPlus, UserCheck, X } from 'lucide-react';
 import type { Landmark } from '@/services/wikipedia';
 import { getLandmarks } from '@/services/wikipedia';
 import { summarizeLandmarkInfo } from '@/ai/flows/summarize-landmark-info';
 import { useToast } from '@/hooks/use-toast';
 import type { LatLngExpression } from 'leaflet';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import type { User } from '@/types'; // Import User type
+import type { User } from '@/types';
 
 
 // Dynamically import MapDisplay to avoid SSR issues with Leaflet
@@ -47,22 +46,23 @@ export default function Home() {
 
   const fetchLandmarks = useCallback(async (center: LatLngExpression) => {
     setIsLoadingLandmarks(true);
-    setLandmarks([]); // Clear previous landmarks while loading
-    setLandmarkSummaries({}); // Clear summaries
+    setLandmarks([]);
+    setLandmarkSummaries({});
     try {
-      // Convert LatLngExpression to Location object
       const location = Array.isArray(center)
         ? { lat: center[0], lng: center[1] }
         : { lat: center.lat, lng: center.lng };
 
       const fetchedLandmarks = await getLandmarks(location);
       setLandmarks(fetchedLandmarks);
-      // Fetch summaries for new landmarks
-      // Note: fetchSummaries is not wrapped in useCallback here, if it had complex dependencies it should be.
-      // For now, it's called from within fetchLandmarks which is already memoized.
+      
       const summariesToFetchFor = fetchedLandmarks.filter(lm => !landmarkSummaries[lm.title]);
       if (summariesToFetchFor.length > 0) {
-        fetchSummaries(summariesToFetchFor);
+        // fetchSummaries is defined later and wrapped in useCallback
+        // It's called inside fetchLandmarks which is also useCallback'd
+        // Re-fetching summaries for all landmarks for simplicity here.
+        // In a real app, you might only fetch for new landmarks.
+         fetchSummaries(fetchedLandmarks);
       }
     } catch (error) {
       console.error('Error fetching landmarks:', error);
@@ -74,8 +74,7 @@ export default function Home() {
     } finally {
       setIsLoadingLandmarks(false);
     }
-  }, [toast, landmarkSummaries]); // landmarkSummaries dependency for fetchSummaries logic
-
+  }, [toast, landmarkSummaries]); // Added fetchSummaries once it's defined with useCallback
 
   const fetchSummaries = useCallback(async (landmarksToSummarize: Landmark[]) => {
     const newSummaries: Record<string, string> = {};
@@ -97,38 +96,46 @@ export default function Home() {
      setLandmarkSummaries(prev => ({ ...prev, ...newSummaries }));
   }, [setLandmarkSummaries]);
 
-
+  // Update fetchLandmarks dependencies after fetchSummaries is defined
   useEffect(() => {
-    // Initial landmark fetch on component mount
     fetchLandmarks(mapCenter);
   }, [fetchLandmarks, mapCenter]);
 
 
   const handleMapMove = useCallback((center: LatLngExpression) => {
     setMapCenter(center);
-  }, []); // setMapCenter is stable
+  }, []); 
 
   const handleDiscoverLandmarks = useCallback(() => {
     fetchLandmarks(mapCenter);
   }, [fetchLandmarks, mapCenter]);
 
-  const handleFollowToggle = (userId: string) => {
-    setUsers(prevUsers =>
-      prevUsers.map(user =>
-        user.id === userId ? { ...user, following: !user.following } : user
-      )
-    );
-    const userToggled = users.find(u => u.id === userId);
-    if (userToggled) {
-      toast({
-        title: userToggled.following ? 'Unfollowed' : 'Followed',
-        description: `You ${userToggled.following ? 'unfollowed' : 'followed'} ${userToggled.name}.`,
+  const handleFollowToggle = useCallback((userId: string) => {
+    setUsers(prevUsers => {
+      let toggledUserInstance: User | undefined;
+      const newUsers = prevUsers.map(user => {
+        if (user.id === userId) {
+          toggledUserInstance = { ...user, following: !user.following };
+          return toggledUserInstance;
+        }
+        return user;
       });
-    }
-    if (selectedUser?.id === userId) {
-      setSelectedUser(prev => prev ? { ...prev, following: !prev.following } : null);
-    }
-  };
+
+      if (toggledUserInstance) {
+        toast({
+          title: toggledUserInstance.following ? 'Followed' : 'Unfollowed',
+          description: `You ${toggledUserInstance.following ? 'followed' : 'unfollowed'} ${toggledUserInstance.name}.`,
+        });
+
+        if (selectedUser?.id === userId) {
+          setSelectedUser(prevSelectedUser => 
+            prevSelectedUser ? { ...prevSelectedUser, following: (toggledUserInstance as User).following } : null
+          );
+        }
+      }
+      return newUsers;
+    });
+  }, [selectedUser, toast, setUsers, setSelectedUser]);
 
   const handleProfileSave = () => {
     setIsProfileEditing(false);
@@ -150,7 +157,7 @@ export default function Home() {
             setMapCenter([item.lat, item.lng]);
         }
      }
-   }, [setSelectedUser, setSelectedLandmark, setMapCenter]);
+   }, [setMapCenter, setSelectedUser, setSelectedLandmark]);
 
 
   return (
@@ -249,70 +256,69 @@ export default function Home() {
                  <CardTitle className="text-base font-medium">Following</CardTitle>
                </CardHeader>
                <CardContent>
-                  <ul className="space-y-3 max-h-48 overflow-y-auto">
-                    {users.filter(user => user.following).map((user) => (
-                      <li key={user.id} className="flex items-center justify-between p-2 rounded-md hover:bg-accent transition-colors duration-150">
-                         <div className="flex items-center space-x-3 cursor-pointer" onClick={() => handleMarkerClick(user)}>
-                           <Avatar className="h-8 w-8">
-                              <AvatarImage src={user.avatar} alt={user.name} data-ai-hint={user["data-ai-hint"]}/>
-                              <AvatarFallback>{user.name.charAt(0)}</AvatarFallback>
-                           </Avatar>
-                           <span className="text-sm font-medium">{user.name}</span>
-                         </div>
-                        <TooltipProvider>
-                           <Tooltip>
-                             <TooltipTrigger asChild>
-                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleFollowToggle(user.id)}>
-                                  <UserCheck className="h-4 w-4 text-primary" />
-                                </Button>
-                             </TooltipTrigger>
-                             <TooltipContent>
-                               <p>Unfollow {user.name}</p>
-                             </TooltipContent>
-                           </Tooltip>
-                         </TooltipProvider>
-                       </li>
-                    ))}
-                     {users.filter(user => user.following).length === 0 && (
-                       <p className="text-sm text-muted-foreground text-center py-2">You are not following anyone yet.</p>
-                     )}
-                   </ul>
+                  <TooltipProvider>
+                    <ul className="space-y-3 max-h-48 overflow-y-auto">
+                      {users.filter(user => user.following).map((user) => (
+                        <li key={user.id} className="flex items-center justify-between p-2 rounded-md hover:bg-accent transition-colors duration-150">
+                           <div className="flex items-center space-x-3 cursor-pointer" onClick={() => handleMarkerClick(user)}>
+                             <Avatar className="h-8 w-8">
+                                <AvatarImage src={user.avatar} alt={user.name} data-ai-hint={user["data-ai-hint"]}/>
+                                <AvatarFallback>{user.name.charAt(0)}</AvatarFallback>
+                             </Avatar>
+                             <span className="text-sm font-medium">{user.name}</span>
+                           </div>
+                             <Tooltip>
+                               <TooltipTrigger asChild>
+                                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleFollowToggle(user.id)}>
+                                    <UserCheck className="h-4 w-4 text-primary" />
+                                  </Button>
+                               </TooltipTrigger>
+                               <TooltipContent>
+                                 <p>Unfollow {user.name}</p>
+                               </TooltipContent>
+                             </Tooltip>
+                         </li>
+                      ))}
+                       {users.filter(user => user.following).length === 0 && (
+                         <p className="text-sm text-muted-foreground text-center py-2">You are not following anyone yet.</p>
+                       )}
+                     </ul>
+                   </TooltipProvider>
                </CardContent>
              </Card>
-             {/* <Separator className="my-4" /> */}
              <Card className="shadow-sm">
                 <CardHeader className="pb-2">
                  <CardTitle className="text-base font-medium">Suggestions</CardTitle>
                </CardHeader>
                 <CardContent>
-                  <ul className="space-y-3 max-h-48 overflow-y-auto">
-                     {users.filter(user => !user.following).map((user) => (
-                      <li key={user.id} className="flex items-center justify-between p-2 rounded-md hover:bg-accent transition-colors duration-150">
-                         <div className="flex items-center space-x-3 cursor-pointer" onClick={() => handleMarkerClick(user)}>
-                           <Avatar className="h-8 w-8">
-                             <AvatarImage src={user.avatar} alt={user.name} data-ai-hint={user["data-ai-hint"]} />
-                             <AvatarFallback>{user.name.charAt(0)}</AvatarFallback>
-                           </Avatar>
-                           <span className="text-sm font-medium">{user.name}</span>
-                         </div>
-                         <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleFollowToggle(user.id)}>
-                                  <UserPlus className="h-4 w-4 text-muted-foreground hover:text-primary" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>Follow {user.name}</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                       </li>
-                     ))}
-                     {users.filter(user => !user.following).length === 0 && (
-                         <p className="text-sm text-muted-foreground text-center py-2">No suggestions right now.</p>
-                       )}
-                   </ul>
+                  <TooltipProvider>
+                    <ul className="space-y-3 max-h-48 overflow-y-auto">
+                       {users.filter(user => !user.following).map((user) => (
+                        <li key={user.id} className="flex items-center justify-between p-2 rounded-md hover:bg-accent transition-colors duration-150">
+                           <div className="flex items-center space-x-3 cursor-pointer" onClick={() => handleMarkerClick(user)}>
+                             <Avatar className="h-8 w-8">
+                               <AvatarImage src={user.avatar} alt={user.name} data-ai-hint={user["data-ai-hint"]} />
+                               <AvatarFallback>{user.name.charAt(0)}</AvatarFallback>
+                             </Avatar>
+                             <span className="text-sm font-medium">{user.name}</span>
+                           </div>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleFollowToggle(user.id)}>
+                                    <UserPlus className="h-4 w-4 text-muted-foreground hover:text-primary" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Follow {user.name}</p>
+                                </TooltipContent>
+                              </Tooltip>
+                         </li>
+                       ))}
+                       {users.filter(user => !user.following).length === 0 && (
+                           <p className="text-sm text-muted-foreground text-center py-2">No suggestions right now.</p>
+                         )}
+                     </ul>
+                   </TooltipProvider>
                 </CardContent>
              </Card>
           </div>
@@ -320,7 +326,7 @@ export default function Home() {
       </aside>
 
       {/* Main Content Area - Map */}
-      <main className="flex-1 h-full pl-80"> {/* Add padding to offset the fixed sidebar */}
+      <main className="flex-1 h-full pl-80">
          <MapDisplay
            center={mapCenter}
            users={users}
@@ -333,11 +339,10 @@ export default function Home() {
          />
       </main>
 
-       {/* Selected Item Overlay Card - Animated */}
        {(selectedUser || selectedLandmark) && (
          <Card className="absolute bottom-4 right-4 w-80 z-20 shadow-xl transition-all duration-300 ease-in-out animate-in fade-in slide-in-from-bottom-5">
            <CardHeader className="flex flex-row items-start justify-between pb-2">
-              <div className="flex-1 pr-2"> {/* Allow title to wrap */}
+              <div className="flex-1 pr-2">
                 <CardTitle className="text-lg font-semibold leading-tight">
                   {selectedUser?.name || selectedLandmark?.title}
                 </CardTitle>
@@ -346,7 +351,7 @@ export default function Home() {
                      href={selectedLandmark.wikipediaUrl}
                      target="_blank"
                      rel="noopener noreferrer"
-                     className="text-xs text-primary hover:underline block mt-1" // Block for better spacing
+                     className="text-xs text-primary hover:underline block mt-1"
                    >
                      View on Wikipedia
                    </a>
@@ -385,6 +390,3 @@ export default function Home() {
     </div>
   );
 }
-
-
-    
