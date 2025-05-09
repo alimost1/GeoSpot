@@ -1,6 +1,7 @@
+
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -26,9 +27,9 @@ const MapDisplay = dynamic(() => import('@/components/MapDisplay'), {
 
 // Mock user data using User type
 const mockUsers: User[] = [
-  { id: '1', name: 'Alice', avatar: 'https://picsum.photos/seed/alice/40/40', location: [48.8584, 2.2945], following: false }, // Near Eiffel Tower
-  { id: '2', name: 'Bob', avatar: 'https://picsum.photos/seed/bob/40/40', location: [48.8606, 2.3376], following: true }, // Near Louvre
-  { id: '3', name: 'Charlie', avatar: 'https://picsum.photos/seed/charlie/40/40', location: [48.8530, 2.3499], following: false }, // Near Notre Dame
+  { id: '1', name: 'Alice', avatar: 'https://picsum.photos/seed/alice/40/40', location: [48.8584, 2.2945], following: false, "data-ai-hint": "person face" }, // Near Eiffel Tower
+  { id: '2', name: 'Bob', avatar: 'https://picsum.photos/seed/bob/40/40', location: [48.8606, 2.3376], following: true, "data-ai-hint": "man portrait" }, // Near Louvre
+  { id: '3', name: 'Charlie', avatar: 'https://picsum.photos/seed/charlie/40/40', location: [48.8530, 2.3499], following: false, "data-ai-hint": "woman smiling" }, // Near Notre Dame
 ];
 
 export default function Home() {
@@ -44,12 +45,7 @@ export default function Home() {
 
   const { toast } = useToast();
 
-  useEffect(() => {
-    // Initial landmark fetch on component mount
-    fetchLandmarks(mapCenter);
-  }, []); // Empty dependency array ensures this runs only once
-
-  const fetchLandmarks = async (center: LatLngExpression) => {
+  const fetchLandmarks = useCallback(async (center: LatLngExpression) => {
     setIsLoadingLandmarks(true);
     setLandmarks([]); // Clear previous landmarks while loading
     setLandmarkSummaries({}); // Clear summaries
@@ -62,7 +58,12 @@ export default function Home() {
       const fetchedLandmarks = await getLandmarks(location);
       setLandmarks(fetchedLandmarks);
       // Fetch summaries for new landmarks
-      fetchSummaries(fetchedLandmarks);
+      // Note: fetchSummaries is not wrapped in useCallback here, if it had complex dependencies it should be.
+      // For now, it's called from within fetchLandmarks which is already memoized.
+      const summariesToFetchFor = fetchedLandmarks.filter(lm => !landmarkSummaries[lm.title]);
+      if (summariesToFetchFor.length > 0) {
+        fetchSummaries(summariesToFetchFor);
+      }
     } catch (error) {
       console.error('Error fetching landmarks:', error);
       toast({
@@ -73,42 +74,43 @@ export default function Home() {
     } finally {
       setIsLoadingLandmarks(false);
     }
-  };
+  }, [toast, landmarkSummaries]); // landmarkSummaries dependency for fetchSummaries logic
 
- const fetchSummaries = async (landmarksToSummarize: Landmark[]) => {
-    const summaries: Record<string, string> = {};
+
+  const fetchSummaries = useCallback(async (landmarksToSummarize: Landmark[]) => {
+    const newSummaries: Record<string, string> = {};
      const fetchPromises = landmarksToSummarize.map(async (landmark) => {
-       if (!landmarkSummaries[landmark.title]) { // Only fetch if summary doesn't exist
          try {
            const result = await summarizeLandmarkInfo({
              title: landmark.title,
              description: landmark.description,
              wikipediaUrl: landmark.wikipediaUrl,
            });
-           summaries[landmark.title] = result.summary;
+           newSummaries[landmark.title] = result.summary;
          } catch (error) {
            console.error(`Error summarizing landmark ${landmark.title}:`, error);
-           // Optionally add a placeholder or error message for this specific landmark
-           summaries[landmark.title] = "Summary unavailable.";
+           newSummaries[landmark.title] = "Summary unavailable.";
          }
-       } else {
-         // Use existing summary if available
-         summaries[landmark.title] = landmarkSummaries[landmark.title];
-       }
      });
 
-     await Promise.all(fetchPromises); // Wait for all summaries to be fetched/retrieved
-     setLandmarkSummaries(prev => ({ ...prev, ...summaries }));
-  };
+     await Promise.all(fetchPromises);
+     setLandmarkSummaries(prev => ({ ...prev, ...newSummaries }));
+  }, [setLandmarkSummaries]);
 
 
-  const handleMapMove = (center: LatLngExpression) => {
-    setMapCenter(center);
-  };
-
-  const handleDiscoverLandmarks = () => {
+  useEffect(() => {
+    // Initial landmark fetch on component mount
     fetchLandmarks(mapCenter);
-  };
+  }, [fetchLandmarks, mapCenter]);
+
+
+  const handleMapMove = useCallback((center: LatLngExpression) => {
+    setMapCenter(center);
+  }, []); // setMapCenter is stable
+
+  const handleDiscoverLandmarks = useCallback(() => {
+    fetchLandmarks(mapCenter);
+  }, [fetchLandmarks, mapCenter]);
 
   const handleFollowToggle = (userId: string) => {
     setUsers(prevUsers =>
@@ -123,7 +125,6 @@ export default function Home() {
         description: `You ${userToggled.following ? 'unfollowed' : 'followed'} ${userToggled.name}.`,
       });
     }
-     // Update selected user card if it's the one being toggled
     if (selectedUser?.id === userId) {
       setSelectedUser(prev => prev ? { ...prev, following: !prev.following } : null);
     }
@@ -137,21 +138,20 @@ export default function Home() {
     });
   };
 
-  const handleMarkerClick = (item: User | Landmark) => {
-     if ('location' in item) { // It's a User
+  const handleMarkerClick = useCallback((item: User | Landmark) => {
+     if ('location' in item) { 
        setSelectedUser(item);
        setSelectedLandmark(null);
-       // Optionally center map on clicked user
        setMapCenter(item.location);
-     } else { // It's a Landmark
+     } else { 
        setSelectedLandmark(item);
        setSelectedUser(null);
-       // Optionally center map on clicked landmark if coords exist
         if (item.lat && item.lng) {
             setMapCenter([item.lat, item.lng]);
         }
      }
-   };
+   }, [setSelectedUser, setSelectedLandmark, setMapCenter]);
+
 
   return (
     <div className="flex h-screen w-screen bg-background text-foreground relative overflow-hidden">
@@ -177,7 +177,7 @@ export default function Home() {
               <CardContent>
                 <div className="flex items-center space-x-4 mb-4">
                   <Avatar className="h-16 w-16">
-                    <AvatarImage src="https://picsum.photos/seed/currentuser/64/64" alt="My Avatar" />
+                    <AvatarImage src="https://picsum.photos/seed/currentuser/64/64" alt="My Avatar" data-ai-hint="profile avatar" />
                     <AvatarFallback>{profileName.charAt(0)}</AvatarFallback>
                   </Avatar>
                   {isProfileEditing ? (
@@ -254,7 +254,7 @@ export default function Home() {
                       <li key={user.id} className="flex items-center justify-between p-2 rounded-md hover:bg-accent transition-colors duration-150">
                          <div className="flex items-center space-x-3 cursor-pointer" onClick={() => handleMarkerClick(user)}>
                            <Avatar className="h-8 w-8">
-                              <AvatarImage src={user.avatar} alt={user.name} />
+                              <AvatarImage src={user.avatar} alt={user.name} data-ai-hint={user["data-ai-hint"]}/>
                               <AvatarFallback>{user.name.charAt(0)}</AvatarFallback>
                            </Avatar>
                            <span className="text-sm font-medium">{user.name}</span>
@@ -290,7 +290,7 @@ export default function Home() {
                       <li key={user.id} className="flex items-center justify-between p-2 rounded-md hover:bg-accent transition-colors duration-150">
                          <div className="flex items-center space-x-3 cursor-pointer" onClick={() => handleMarkerClick(user)}>
                            <Avatar className="h-8 w-8">
-                             <AvatarImage src={user.avatar} alt={user.name} />
+                             <AvatarImage src={user.avatar} alt={user.name} data-ai-hint={user["data-ai-hint"]} />
                              <AvatarFallback>{user.name.charAt(0)}</AvatarFallback>
                            </Avatar>
                            <span className="text-sm font-medium">{user.name}</span>
@@ -361,7 +361,7 @@ export default function Home() {
              {selectedUser && (
                <div className="flex items-center space-x-3">
                  <Avatar className="h-10 w-10">
-                   <AvatarImage src={selectedUser.avatar} alt={selectedUser.name} />
+                   <AvatarImage src={selectedUser.avatar} alt={selectedUser.name} data-ai-hint={selectedUser["data-ai-hint"]} />
                    <AvatarFallback>{selectedUser.name.charAt(0)}</AvatarFallback>
                  </Avatar>
                  <Button
@@ -385,3 +385,6 @@ export default function Home() {
     </div>
   );
 }
+
+
+    

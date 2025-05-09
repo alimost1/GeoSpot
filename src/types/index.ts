@@ -1,3 +1,4 @@
+
 import type { LatLngExpression } from 'leaflet';
 import type { Landmark as WikipediaLandmark } from '@/services/wikipedia';
 
@@ -15,4 +16,8 @@ export interface User {
   avatar: string;
   location: LatLngExpression; // Use Leaflet's type for location
   following: boolean;
+  "data-ai-hint"?: string; // For placeholder image hints
 }
+
+
+    
