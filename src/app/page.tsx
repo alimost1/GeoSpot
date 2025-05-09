@@ -41,74 +41,96 @@ export default function Home() {
   const [isProfileEditing, setIsProfileEditing] = useState<boolean>(false);
   const [isLoadingLandmarks, setIsLoadingLandmarks] = useState<boolean>(false);
   const [landmarkSummaries, setLandmarkSummaries] = useState<Record<string, string>>({});
+  const [refreshId, setRefreshId] = useState(0); // Used to trigger manual refresh
 
   const { toast } = useToast();
 
-  const fetchLandmarks = useCallback(async (center: LatLngExpression) => {
-    setIsLoadingLandmarks(true);
-    setLandmarks([]);
-    setLandmarkSummaries({});
-    try {
-      const location = Array.isArray(center)
-        ? { lat: center[0], lng: center[1] }
-        : { lat: center.lat, lng: center.lng };
-
-      const fetchedLandmarks = await getLandmarks(location);
-      setLandmarks(fetchedLandmarks);
-      
-      const summariesToFetchFor = fetchedLandmarks.filter(lm => !landmarkSummaries[lm.title]);
-      if (summariesToFetchFor.length > 0) {
-        // fetchSummaries is defined later and wrapped in useCallback
-        // It's called inside fetchLandmarks which is also useCallback'd
-        // Re-fetching summaries for all landmarks for simplicity here.
-        // In a real app, you might only fetch for new landmarks.
-         fetchSummaries(fetchedLandmarks);
-      }
-    } catch (error) {
-      console.error('Error fetching landmarks:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to fetch landmarks. Please try again.',
-        variant: 'destructive',
-      });
-    } finally {
-      setIsLoadingLandmarks(false);
-    }
-  }, [toast, landmarkSummaries]); // Added fetchSummaries once it's defined with useCallback
-
-  const fetchSummaries = useCallback(async (landmarksToSummarize: Landmark[]) => {
-    const newSummaries: Record<string, string> = {};
-     const fetchPromises = landmarksToSummarize.map(async (landmark) => {
-         try {
-           const result = await summarizeLandmarkInfo({
-             title: landmark.title,
-             description: landmark.description,
-             wikipediaUrl: landmark.wikipediaUrl,
-           });
-           newSummaries[landmark.title] = result.summary;
-         } catch (error) {
-           console.error(`Error summarizing landmark ${landmark.title}:`, error);
-           newSummaries[landmark.title] = "Summary unavailable.";
-         }
-     });
-
-     await Promise.all(fetchPromises);
-     setLandmarkSummaries(prev => ({ ...prev, ...newSummaries }));
-  }, [setLandmarkSummaries]);
-
-  // Update fetchLandmarks dependencies after fetchSummaries is defined
   useEffect(() => {
-    fetchLandmarks(mapCenter);
-  }, [fetchLandmarks, mapCenter]);
+    const loadDataForCurrentCenter = async (currentCenter: LatLngExpression) => {
+      setIsLoadingLandmarks(true);
+      setLandmarks([]); // Clear previous landmarks to show loading state
+
+      try {
+        const location = Array.isArray(currentCenter)
+          ? { lat: currentCenter[0], lng: currentCenter[1] }
+          : { lat: currentCenter.lat, lng: currentCenter.lng };
+
+        const newFetchedLandmarks = await getLandmarks(location);
+        setLandmarks(newFetchedLandmarks);
+
+        // Fetch summaries for newly fetched landmarks
+        // We iterate and update summaries one by one using functional updates
+        // to avoid issues with stale closures and ensure individual updates.
+        const landmarkTitlesBeingSummarized = new Set<string>();
+        
+        const summaryPromises = newFetchedLandmarks.map(async (landmark) => {
+          // Check if summary exists in current state (captured at effect run time) or is already being fetched in this batch
+          if (landmarkSummaries[landmark.title] || landmarkTitlesBeingSummarized.has(landmark.title)) {
+            // If summary exists and we want to ensure it's up-to-date, we could re-fetch.
+            // For now, if it exists in the initial landmarkSummaries snapshot for this effect run, assume it's okay.
+            // Or, always fetch, and let `summarizeLandmarkInfo` be idempotent.
+            // To keep it simple: if not in current `landmarkSummaries` state object when this effect ran, fetch it.
+            // This means if `landmarkSummaries` was updated by another process, this might re-fetch.
+            // The `landmarkTitlesBeingSummarized` prevents duplicate fetches within *this specific batch*.
+            
+            // A more robust check against current state would be to use setLandmarkSummaries(prev => { if (prev[title]) ... })
+            // but that becomes complex with async map.
+            // For this iteration, we rely on the initial state of landmarkSummaries for the check,
+            // and `landmarkTitlesBeingSummarized` for in-batch deduplication.
+            // If `landmarkSummaries` itself were a dep, it would loop.
+             if (landmarkSummaries[landmark.title]) return; // Skip if summary was already in the state when effect started
+          }
+          
+          if(landmarkTitlesBeingSummarized.has(landmark.title)) return; // Already processing in this batch
+          landmarkTitlesBeingSummarized.add(landmark.title);
+
+          try {
+            const result = await summarizeLandmarkInfo({
+              title: landmark.title,
+              description: landmark.description,
+              wikipediaUrl: landmark.wikipediaUrl,
+            });
+            setLandmarkSummaries(prev => ({ ...prev, [landmark.title]: result.summary }));
+          } catch (error) {
+            console.error(`Error summarizing landmark ${landmark.title}:`, error);
+            setLandmarkSummaries(prev => ({ ...prev, [landmark.title]: "Summary unavailable." }));
+          }
+        });
+        await Promise.all(summaryPromises);
+
+      } catch (error) {
+        console.error('Error fetching data:', error);
+        toast({
+          title: 'Error',
+          description: 'Failed to fetch data for the current map area.',
+          variant: 'destructive',
+        });
+      } finally {
+        setIsLoadingLandmarks(false);
+      }
+    };
+
+    if (mapCenter) {
+      loadDataForCurrentCenter(mapCenter);
+    }
+  // Dependencies:
+  // - mapCenter: Triggers fetch when map moves.
+  // - refreshId: Triggers fetch for manual refresh.
+  // - toast: For showing error messages. Stable reference from useToast.
+  // - State setters (setLandmarks, setIsLoadingLandmarks, setLandmarkSummaries): Stable references.
+  // - getLandmarks, summarizeLandmarkInfo: Imported functions, stable references.
+  // - landmarkSummaries (the state object itself) is intentionally NOT a dependency here to prevent loops.
+  //   It's read once when the effect runs to decide initial summary fetches.
+  }, [mapCenter, refreshId, toast, setLandmarks, setIsLoadingLandmarks, setLandmarkSummaries]);
 
 
   const handleMapMove = useCallback((center: LatLngExpression) => {
     setMapCenter(center);
-  }, []); 
+  }, [setMapCenter]); 
 
   const handleDiscoverLandmarks = useCallback(() => {
-    fetchLandmarks(mapCenter);
-  }, [fetchLandmarks, mapCenter]);
+    setRefreshId(id => id + 1); // Trigger the useEffect by changing refreshId
+  }, [setRefreshId]);
 
   const handleFollowToggle = useCallback((userId: string) => {
     setUsers(prevUsers => {
@@ -213,7 +235,7 @@ export default function Home() {
               <Search className="mr-2 h-4 w-4" />
               {isLoadingLandmarks ? 'Loading...' : 'Find Nearby Landmarks'}
             </Button>
-            {isLoadingLandmarks && <p className="text-sm text-muted-foreground text-center py-2">Loading landmarks...</p>}
+            {isLoadingLandmarks && landmarks.length === 0 && <p className="text-sm text-muted-foreground text-center py-2">Loading landmarks...</p>}
             {!isLoadingLandmarks && landmarks.length > 0 && (
               <Card className="shadow-sm">
                 <CardHeader className="pb-2">
@@ -241,7 +263,7 @@ export default function Home() {
               </Card>
             )}
              {!isLoadingLandmarks && landmarks.length === 0 && (
-                 <p className="text-sm text-muted-foreground text-center py-2">No landmarks found nearby.</p>
+                 <p className="text-sm text-muted-foreground text-center py-2">No landmarks found nearby. Click "Find Nearby Landmarks" to search.</p>
              )}
           </div>
 
