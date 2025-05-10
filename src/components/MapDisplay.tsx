@@ -1,221 +1,96 @@
-'use client';
+// src/app/page.tsx
+import React, { useState, useCallback, useMemo } from 'react';
+import dynamic from 'next/dynamic';
+import 'leaflet/dist/leaflet.css'; // CRITICAL: Import Leaflet's CSS
 
-import React, { useEffect, useRef, useState, memo, useCallback } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMapEvents, Tooltip as LeafletTooltip } from 'react-leaflet';
-import L, { type LatLngExpression, type LatLngTuple, type Map as LeafletMap } from 'leaflet';
-import type { User, Landmark as LandmarkType } from '@/types';
-import { Landmark as LandmarkLucideIcon, User as UserLucideIcon } from 'lucide-react';
-import ReactDOMServer from 'react-dom/server';
-import { Skeleton } from '@/components/ui/skeleton';
+// Assuming these types are defined and exported from MapDisplay.tsx or a shared types file
+import type { User, Landmark } from '@/components/MapDisplay'; // Adjust path if necessary
+import type { LatLngExpression } from 'leaflet';
 
-// Custom User Icon
-const userIconSvg = ReactDOMServer.renderToString(<UserLucideIcon size={24} color="hsl(var(--primary))" />);
-const userIcon = L.divIcon({
-  html: userIconSvg,
-  className: 'bg-transparent border-none',
-  iconSize: [24, 24],
-  iconAnchor: [12, 24],
-  popupAnchor: [0, -24]
-});
+// If you are using shadcn/ui Skeleton
+import { Skeleton } from '@/components/ui/skeleton'; // Adjust path if necessary
 
-// Custom Landmark Icon
-const landmarkIconSvg = ReactDOMServer.renderToString(<LandmarkLucideIcon size={24} color="hsl(var(--chart-3))" />);
-const landmarkIcon = L.divIcon({
-  html: landmarkIconSvg,
-  className: 'bg-transparent border-none',
-  iconSize: [24, 24],
-  iconAnchor: [12, 24],
-  popupAnchor: [0, -24]
-});
-
-interface MapDisplayProps {
-  center: LatLngExpression;
-  users: User[];
-  landmarks: LandmarkType[];
-  onMove: (center: LatLngExpression) => void;
-  onMarkerClick: (item: User | LandmarkType) => void;
-  selectedUser: User | null;
-  selectedLandmark: LandmarkType | null;
-  landmarkSummaries: Record<string, string>;
-}
-
-const MapEventsHandler = ({ onMove }: { onMove: (center: LatLngExpression) => void }) => {
-  const map = useMapEvents({
-    moveend: () => {
-      if (map) {
-        onMove(map.getCenter());
-      }
-    },
-  });
-  return null;
-};
-
-
-const MapDisplayComponent: React.FC<MapDisplayProps> = ({
-  center: propCenter,
-  users,
-  landmarks,
-  onMove,
-  onMarkerClick,
-  selectedUser,
-  selectedLandmark,
-  landmarkSummaries,
-}) => {
-  const mapRef = useRef<LeafletMap | null>(null);
-  const [isClient, setIsClient] = useState(false);
-  const [currentMapCenter, setCurrentMapCenter] = useState<LatLngExpression>(propCenter);
-
-  useEffect(() => {
-    setIsClient(true);
-  }, []);
-
-  useEffect(() => {
-    setCurrentMapCenter(propCenter);
-  }, [propCenter]);
-
-  const whenCreatedCb = useCallback((mapInstance: LeafletMap) => {
-    mapRef.current = mapInstance;
-    // After map is created, explicitly set the initial center if it's different
-    // This ensures the map starts at propCenter even if MapContainer's internal default differs
-    if (propCenter) {
-      const currentViewCenter = mapInstance.getCenter();
-      let targetLat: number, targetLng: number;
-      if (Array.isArray(propCenter)) { [targetLat, targetLng] = propCenter as LatLngTuple; }
-      else { targetLat = propCenter.lat; targetLng = propCenter.lng; }
-      const tolerance = 0.00001;
-      if (Math.abs(currentViewCenter.lat - targetLat) > tolerance || Math.abs(currentViewCenter.lng - targetLng) > tolerance) {
-          mapInstance.setView(propCenter, mapInstance.getZoom()); // Keep current zoom or default
-      }
-    }
-  }, [propCenter]); // propCenter is a dependency for the initial view setup logic within whenCreated
-
-
-  useEffect(() => {
-    if (mapRef.current && propCenter) {
-      const map = mapRef.current;
-      const currentViewCenter = map.getCenter();
-      let targetLat: number, targetLng: number;
-
-      if (Array.isArray(propCenter)) {
-        [targetLat, targetLng] = propCenter as LatLngTuple;
-      } else {
-        targetLat = propCenter.lat;
-        targetLng = propCenter.lng;
-      }
-
-      const tolerance = 0.00001;
-      if (
-        Math.abs(currentViewCenter.lat - targetLat) > tolerance ||
-        Math.abs(currentViewCenter.lng - targetLng) > tolerance
-      ) {
-        map.setView(propCenter);
-      }
-    }
-  }, [propCenter]);
-
-  useEffect(() => {
-    if (mapRef.current) {
-      const map = mapRef.current;
-      const focusedItem = selectedUser || selectedLandmark;
-      let targetLatLng: LatLngExpression | null = null;
-
-      if (selectedUser) {
-        targetLatLng = selectedUser.location;
-      } else if (selectedLandmark?.lat && selectedLandmark?.lng) {
-        targetLatLng = [selectedLandmark.lat, selectedLandmark.lng];
-      }
-
-      if (targetLatLng && typeof map.flyTo === 'function') {
-        const currentZoom = map.getZoom();
-        map.flyTo(targetLatLng, Math.max(currentZoom, 15), { duration: 0.5 });
-      }
-    }
-  }, [selectedUser, selectedLandmark]);
-
-  useEffect(() => {
-    const mapInstance = mapRef.current;
-    return () => {
-      if (mapInstance && typeof mapInstance.remove === 'function') {
-        mapInstance.remove();
-      }
-      mapRef.current = null;
-    };
-  }, []);
-
-
-  if (!isClient) {
-    return <Skeleton className="w-full h-full" />;
+// Dynamically import MapDisplay component to ensure it only runs on the client-side
+const DynamicMapDisplay = dynamic(
+  () => import('@/components/MapDisplay'), // Adjust path to your MapDisplay.tsx
+  {
+    ssr: false, // Ensure component is not rendered on the server
+    loading: () => ( // Optional: loading component while MapDisplay is being loaded
+      <div style={{ height: '500px', width: '100%' }} role="status" aria-label="Loading map...">
+        <Skeleton className="w-full h-full" />
+      </div>
+    ),
   }
+);
+
+export default function HomePage() {
+  // Example state for map properties
+  const [mapCenter, setMapCenter] = useState<LatLngExpression>([51.505, -0.09]); // Initial center
+  const [selectedItem, setSelectedItem] = useState<User | Landmark | null>(null);
+
+  // Example data (should be memoized if derived from props or complex state)
+  const users = useMemo<User[]>(() => [
+    { id: 1, name: 'User Alice', location: [51.51, -0.1] },
+    { id: 2, name: 'User Bob', location: [51.50, -0.08] },
+  ], []);
+
+  const landmarks = useMemo<Landmark[]>(() => [
+    { id: 'lm1', title: 'Big Ben', lat: 51.5007, lng: -0.1246, description: 'Famous clock tower.' },
+    { id: 'lm2', title: 'London Eye', lat: 51.5033, lng: -0.1195, description: 'Ferris wheel.' },
+  ], []);
+
+  // Callbacks (should be wrapped in useCallback to maintain stable references)
+  const handleMapMove = useCallback((newCenter: LatLngExpression) => {
+    console.log('Map moved to:', newCenter);
+    // If you want to update the center state from map interaction:
+    // setMapCenter(newCenter); // Be careful of loops if this prop also drives map.setView
+  }, []);
+
+  const handleMarkerClick = useCallback((item: User | Landmark) => {
+    console.log('Marker clicked:', item);
+    setSelectedItem(item);
+    // Example: If item has location or lat/lng, pan to it
+    if ('location' in item && item.location) {
+        setMapCenter(item.location); // This will trigger propCenter change in MapDisplay
+    } else if ('lat' in item && 'lng' in item && item.lat !== null && item.lng !== null) {
+        setMapCenter([item.lat, item.lng]);
+    }
+  }, []);
+
 
   return (
-     <MapContainer
-         center={currentMapCenter}
-         zoom={13}
-         style={{ height: '100%', width: '100%' }}
-         whenCreated={whenCreatedCb}
-       >
-       <TileLayer
-         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-       />
-        <MapEventsHandler onMove={onMove} />
+    <div style={{ padding: '20px' }}>
+      <header style={{ marginBottom: '20px' }}>
+        <h1>Interactive Leaflet Map</h1>
+        <p>
+          If you see "Map container is already initialized", try setting
+          `reactStrictMode: false` in `next.config.js` and restarting the dev server.
+        </p>
+        {selectedItem && (
+          <div style={{ marginTop: '10px', padding: '10px', border: '1px solid #ccc' }}>
+            Selected: {'name' in selectedItem ? selectedItem.name : selectedItem.title}
+          </div>
+        )}
+      </header>
 
-       {users.map((user) => (
-         <Marker
-           key={`user-${user.id}`}
-           position={user.location}
-           icon={userIcon}
-           eventHandlers={{ click: () => onMarkerClick(user) }}
-         >
-           <LeafletTooltip direction="top" offset={[0, -24]}>
-             {user.name}
-           </LeafletTooltip>
-           <Popup minWidth={90}>
-               <div className="text-center">
-                  <h3 className="font-semibold text-sm mb-1">{user.name}</h3>
-                </div>
-            </Popup>
-         </Marker>
-       ))}
-
-       {landmarks.filter(landmark => landmark.lat && landmark.lng).map((landmark) => {
-           const landmarkPosition = [landmark.lat!, landmark.lng!] as LatLngTuple;
-           return (
-             <Marker
-               key={`landmark-${landmark.title}`}
-               position={landmarkPosition}
-               icon={landmarkIcon}
-               eventHandlers={{
-                 click: () => onMarkerClick(landmark),
-               }}
-             >
-                <LeafletTooltip direction="top" offset={[0, -24]}>
-                  {landmark.title}
-                </LeafletTooltip>
-                <Popup>
-                 <div className="w-64">
-                     <h3 className="font-semibold text-base mb-1">{landmark.title}</h3>
-                     <p className="text-xs text-muted-foreground mb-2 leading-snug">
-                        {landmarkSummaries[landmark.title] || (landmark.description ? landmark.description.substring(0, 150) + (landmark.description.length > 150 ? '...' : '') : 'No description available.')}
-                      </p>
-                      <a
-                          href={landmark.wikipediaUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-xs text-primary hover:underline inline-block mt-1"
-                      >
-                          View on Wikipedia
-                      </a>
-                  </div>
-                </Popup>
-             </Marker>
-            );
-         })}
-     </MapContainer>
-   );
- };
-
- const MapDisplay = memo(MapDisplayComponent);
- MapDisplay.displayName = 'MapDisplay';
-
- export default MapDisplay;
+      <main>
+        <div style={{ height: '60vh', minHeight: '400px', width: '100%', border: '1px solid #000' }}>
+          <DynamicMapDisplay
+            center={mapCenter}
+            users={users}
+            landmarks={landmarks}
+            onMove={handleMapMove}
+            onMarkerClick={handleMarkerClick}
+            selectedUser={selectedItem && 'location' in selectedItem ? selectedItem as User : null}
+            selectedLandmark={selectedItem && 'lat' in selectedItem ? selectedItem as Landmark : null}
+            // landmarkSummaries={{}} // Optional
+            zoomLevel={13}
+          />
+        </div>
+        <button onClick={() => setMapCenter([34.0522, -118.2437])} style={{marginTop: '10px', padding: '8px'}}>
+            Go to Los Angeles
+        </button>
+      </main>
+    </div>
+  );
+}
