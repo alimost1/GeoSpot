@@ -1,96 +1,222 @@
-// src/app/page.tsx
-import React, { useState, useCallback, useMemo } from 'react';
-import dynamic from 'next/dynamic';
-import 'leaflet/dist/leaflet.css'; // CRITICAL: Import Leaflet's CSS
+// src/components/MapDisplay.tsx
+'use client'; // Ensures client-side rendering for Leaflet
 
-// Assuming these types are defined and exported from MapDisplay.tsx or a shared types file
-import type { User, Landmark } from '@/components/MapDisplay'; // Adjust path if necessary
-import type { LatLngExpression } from 'leaflet';
+import React, { useEffect, useState, useCallback } from 'react';
+import L, { LatLngExpression, Map as LeafletMap } from 'leaflet';
+import { MapContainer, TileLayer, Marker, Popup as ReactLeafletPopup, useMap, useMapEvents } from 'react-leaflet';
+import type { User, Landmark } from '@/types'; // Corrected import path
+import { Button } from './ui/button';
+import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
+import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 
-// If you are using shadcn/ui Skeleton
-import { Skeleton } from '@/components/ui/skeleton'; // Adjust path if necessary
+// Default Leaflet icon fix (ensure this runs only on client)
+if (typeof window !== 'undefined') {
+  delete (L.Icon.Default.prototype as any)._getIconUrl;
+  L.Icon.Default.mergeOptions({
+    iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+    iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+    shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  });
+}
 
-// Dynamically import MapDisplay component to ensure it only runs on the client-side
-const DynamicMapDisplay = dynamic(
-  () => import('@/components/MapDisplay'), // Adjust path to your MapDisplay.tsx
-  {
-    ssr: false, // Ensure component is not rendered on the server
-    loading: () => ( // Optional: loading component while MapDisplay is being loaded
-      <div style={{ height: '500px', width: '100%' }} role="status" aria-label="Loading map...">
-        <Skeleton className="w-full h-full" />
-      </div>
-    ),
-  }
-);
 
-export default function HomePage() {
-  // Example state for map properties
-  const [mapCenter, setMapCenter] = useState<LatLngExpression>([51.505, -0.09]); // Initial center
-  const [selectedItem, setSelectedItem] = useState<User | Landmark | null>(null);
+const userIcon = new L.Icon({
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41],
+});
 
-  // Example data (should be memoized if derived from props or complex state)
-  const users = useMemo<User[]>(() => [
-    { id: 1, name: 'User Alice', location: [51.51, -0.1] },
-    { id: 2, name: 'User Bob', location: [51.50, -0.08] },
-  ], []);
+const landmarkIcon = new L.Icon({
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x-red.png', // Example: Red marker for landmarks
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x-red.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41],
+});
 
-  const landmarks = useMemo<Landmark[]>(() => [
-    { id: 'lm1', title: 'Big Ben', lat: 51.5007, lng: -0.1246, description: 'Famous clock tower.' },
-    { id: 'lm2', title: 'London Eye', lat: 51.5033, lng: -0.1195, description: 'Ferris wheel.' },
-  ], []);
 
-  // Callbacks (should be wrapped in useCallback to maintain stable references)
-  const handleMapMove = useCallback((newCenter: LatLngExpression) => {
-    console.log('Map moved to:', newCenter);
-    // If you want to update the center state from map interaction:
-    // setMapCenter(newCenter); // Be careful of loops if this prop also drives map.setView
-  }, []);
+interface MapDisplayProps {
+  center: LatLngExpression;
+  zoomLevel?: number;
+  users: User[];
+  landmarks: Landmark[];
+  onMove?: (center: LatLngExpression, zoom: number) => void;
+  onMarkerClick: (item: User | Landmark) => void;
+  selectedUser: User | null;
+  selectedLandmark: Landmark | null;
+  landmarkSummaries?: Record<string, string>;
+  onMapLoad?: (map: LeafletMap) => void;
+}
 
-  const handleMarkerClick = useCallback((item: User | Landmark) => {
-    console.log('Marker clicked:', item);
-    setSelectedItem(item);
-    // Example: If item has location or lat/lng, pan to it
-    if ('location' in item && item.location) {
-        setMapCenter(item.location); // This will trigger propCenter change in MapDisplay
-    } else if ('lat' in item && 'lng' in item && item.lat !== null && item.lng !== null) {
-        setMapCenter([item.lat, item.lng]);
+// Component to handle map events and imperative updates
+const MapController: React.FC<{
+  onMove?: (center: LatLngExpression, zoom: number) => void;
+  onMapLoad?: (map: LeafletMap) => void;
+  center: LatLngExpression;
+  zoom: number;
+  selectedItem: User | Landmark | null;
+}> = ({ onMove, onMapLoad, center, zoom, selectedItem }) => {
+  const map = useMap();
+
+  useEffect(() => {
+    if (onMapLoad) {
+      onMapLoad(map);
     }
-  }, []);
+  }, [map, onMapLoad]);
 
+  useMapEvents({
+    moveend: () => {
+      if (onMove) {
+        const newCenter = map.getCenter();
+        const newZoom = map.getZoom();
+        // Check if onMove is different from the last call to prevent potential loops if parent updates state
+        onMove(newCenter, newZoom);
+      }
+    },
+    zoomend: () => {
+      if (onMove) {
+        const newCenter = map.getCenter();
+        const newZoom = map.getZoom();
+        onMove(newCenter, newZoom);
+      }
+    },
+  });
+
+  // Effect to handle programmatic map view changes (center, zoom from props)
+  useEffect(() => {
+    const currentMapPos = map.getCenter();
+    const targetLatLng = L.latLng(center as L.LatLngTuple); // Ensure center is LatLng compatible
+
+    const needsViewUpdate =
+      Math.abs(currentMapPos.lat - targetLatLng.lat) > 0.0001 ||
+      Math.abs(currentMapPos.lng - targetLatLng.lng) > 0.0001 ||
+      map.getZoom() !== zoom;
+
+    if (needsViewUpdate) {
+      map.flyTo(targetLatLng, zoom);
+    }
+  }, [map, center, zoom]);
+
+  // Effect to handle flying to selected item
+  useEffect(() => {
+    if (selectedItem) {
+      let itemLocation: LatLngExpression | undefined;
+      if ('location' in selectedItem && selectedItem.location) {
+        itemLocation = selectedItem.location;
+      } else if ('lat' in selectedItem && 'lng' in selectedItem && selectedItem.lat != null && selectedItem.lng != null) {
+        itemLocation = [selectedItem.lat, selectedItem.lng];
+      }
+
+      if (itemLocation) {
+        const targetZoom = Math.max(map.getZoom(), 15); 
+        map.flyTo(L.latLng(itemLocation as L.LatLngTuple), targetZoom);
+      }
+    }
+  }, [map, selectedItem]);
+
+  return null;
+};
+
+
+export const MapDisplayComponent: React.FC<MapDisplayProps> = ({
+  center: initialCenter,
+  zoomLevel: initialZoomLevel = 13,
+  users,
+  landmarks,
+  onMove,
+  onMarkerClick,
+  selectedUser,
+  selectedLandmark,
+  landmarkSummaries,
+  onMapLoad,
+}) => {
+  // These states hold the *initial* values for the map.
+  // The MapController will handle subsequent updates based on prop changes.
+  const [currentMapCenter] = useState<LatLngExpression>(initialCenter);
+  const [currentMapZoom] = useState<number>(initialZoomLevel);
+
+  if (typeof window === 'undefined') {
+    return null; 
+  }
 
   return (
-    <div style={{ padding: '20px' }}>
-      <header style={{ marginBottom: '20px' }}>
-        <h1>Interactive Leaflet Map</h1>
-        <p>
-          If you see "Map container is already initialized", try setting
-          `reactStrictMode: false` in `next.config.js` and restarting the dev server.
-        </p>
-        {selectedItem && (
-          <div style={{ marginTop: '10px', padding: '10px', border: '1px solid #ccc' }}>
-            Selected: {'name' in selectedItem ? selectedItem.name : selectedItem.title}
-          </div>
-        )}
-      </header>
+     <MapContainer
+         center={currentMapCenter} 
+         zoom={currentMapZoom}    
+         style={{ height: '100%', width: '100%' }}
+     >
+      <TileLayer
+        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+      />
+      <MapController
+        onMove={onMove}
+        onMapLoad={onMapLoad}
+        center={initialCenter} // Pass the current prop value for controlled updates
+        zoom={initialZoomLevel} // Pass the current prop value for controlled updates
+        selectedItem={selectedUser || selectedLandmark}
+      />
 
-      <main>
-        <div style={{ height: '60vh', minHeight: '400px', width: '100%', border: '1px solid #000' }}>
-          <DynamicMapDisplay
-            center={mapCenter}
-            users={users}
-            landmarks={landmarks}
-            onMove={handleMapMove}
-            onMarkerClick={handleMarkerClick}
-            selectedUser={selectedItem && 'location' in selectedItem ? selectedItem as User : null}
-            selectedLandmark={selectedItem && 'lat' in selectedItem ? selectedItem as Landmark : null}
-            // landmarkSummaries={{}} // Optional
-            zoomLevel={13}
-          />
-        </div>
-        <button onClick={() => setMapCenter([34.0522, -118.2437])} style={{marginTop: '10px', padding: '8px'}}>
-            Go to Los Angeles
-        </button>
-      </main>
-    </div>
+      {users.map(user => (
+        user.location && (
+          <Marker
+            key={`user-${user.id}`}
+            position={user.location}
+            icon={userIcon}
+            eventHandlers={{ click: () => onMarkerClick(user) }}
+          >
+            <ReactLeafletPopup>
+              <Card className="border-none shadow-none w-48">
+                <CardHeader className="p-2 flex flex-row items-center space-x-2">
+                    <Avatar className="h-8 w-8">
+                      <AvatarImage src={user.avatar} alt={user.name} data-ai-hint={user['data-ai-hint']} />
+                      <AvatarFallback>{user.name.substring(0, 2).toUpperCase()}</AvatarFallback>
+                    </Avatar>
+                    <CardTitle className="text-sm">{user.name}</CardTitle>
+                </CardHeader>
+              </Card>
+            </ReactLeafletPopup>
+          </Marker>
+        )
+      ))}
+
+      {landmarks.map(landmark => (
+        landmark.lat != null && landmark.lng != null && (
+          <Marker
+            key={`landmark-${landmark.id}`}
+            position={[landmark.lat, landmark.lng]}
+            icon={landmarkIcon}
+            eventHandlers={{ click: () => onMarkerClick(landmark) }}
+          >
+            <ReactLeafletPopup>
+               <Card className="border-none shadow-none w-60">
+                <CardHeader className="p-2">
+                    <CardTitle className="text-sm">{landmark.title}</CardTitle>
+                </CardHeader>
+                <CardContent className="p-2 text-xs space-y-1">
+                    <p className="line-clamp-2 text-muted-foreground">{landmark.description}</p>
+                    {landmarkSummaries?.[landmark.id as string] && (
+                        <p className="mt-1 text-primary-foreground bg-primary/80 p-1 rounded-sm text-[10px] leading-tight">
+                           <strong>AI:</strong> {landmarkSummaries[landmark.id as string]}
+                        </p>
+                    )}
+                    {landmark.wikipediaUrl && (
+                        <Button variant="link" size="sm" className="p-0 h-auto text-xs" asChild>
+                             <a href={landmark.wikipediaUrl} target="_blank" rel="noopener noreferrer">Wikipedia</a>
+                        </Button>
+                    )}
+                </CardContent>
+              </Card>
+            </ReactLeafletPopup>
+          </Marker>
+        )
+      ))}
+    </MapContainer>
   );
-}
+};
