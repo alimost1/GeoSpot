@@ -39,22 +39,20 @@ interface MapDisplayProps {
   landmarkSummaries: Record<string, string>;
 }
 
-// Simplified MapEvents component, solely for handling map interaction events.
-// It gets the map instance from useMapEvents context.
 const MapEventsHandler = ({ onMove }: { onMove: (center: LatLngExpression) => void }) => {
   const map = useMapEvents({
     moveend: () => {
-      if (map) { // map instance from useMapEvents
+      if (map) {
         onMove(map.getCenter());
       }
     },
   });
-  return null; // This component does not render anything visible
+  return null;
 };
 
 
 const MapDisplayComponent: React.FC<MapDisplayProps> = ({
-  center: propCenter, // Renamed to avoid confusion
+  center: propCenter,
   users,
   landmarks,
   onMove,
@@ -65,21 +63,33 @@ const MapDisplayComponent: React.FC<MapDisplayProps> = ({
 }) => {
   const mapRef = useRef<LeafletMap | null>(null);
   const [isClient, setIsClient] = useState(false);
-  // currentMapCenter is used for the MapContainer's initial center.
-  // Subsequent view changes are handled by effects using mapRef.current.setView/flyTo.
   const [currentMapCenter, setCurrentMapCenter] = useState<LatLngExpression>(propCenter);
 
   useEffect(() => {
     setIsClient(true);
   }, []);
 
-  // Update currentMapCenter if the incoming propCenter changes.
-  // This is mainly for the initial render or if MapContainer needs re-initialization with a new center.
   useEffect(() => {
     setCurrentMapCenter(propCenter);
   }, [propCenter]);
 
-  // Effect for programmatically setting map view when propCenter changes
+  const whenCreatedCb = useCallback((mapInstance: LeafletMap) => {
+    mapRef.current = mapInstance;
+    // After map is created, explicitly set the initial center if it's different
+    // This ensures the map starts at propCenter even if MapContainer's internal default differs
+    if (propCenter) {
+      const currentViewCenter = mapInstance.getCenter();
+      let targetLat: number, targetLng: number;
+      if (Array.isArray(propCenter)) { [targetLat, targetLng] = propCenter as LatLngTuple; }
+      else { targetLat = propCenter.lat; targetLng = propCenter.lng; }
+      const tolerance = 0.00001;
+      if (Math.abs(currentViewCenter.lat - targetLat) > tolerance || Math.abs(currentViewCenter.lng - targetLng) > tolerance) {
+          mapInstance.setView(propCenter, mapInstance.getZoom()); // Keep current zoom or default
+      }
+    }
+  }, [propCenter]); // propCenter is a dependency for the initial view setup logic within whenCreated
+
+
   useEffect(() => {
     if (mapRef.current && propCenter) {
       const map = mapRef.current;
@@ -93,19 +103,16 @@ const MapDisplayComponent: React.FC<MapDisplayProps> = ({
         targetLng = propCenter.lng;
       }
 
-      const tolerance = 0.00001; // A small tolerance for float comparison
+      const tolerance = 0.00001;
       if (
-        // Check if map is ready and if the center is actually different
-        typeof map.setView === 'function' &&
-        (Math.abs(currentViewCenter.lat - targetLat) > tolerance ||
-         Math.abs(currentViewCenter.lng - targetLng) > tolerance)
+        Math.abs(currentViewCenter.lat - targetLat) > tolerance ||
+        Math.abs(currentViewCenter.lng - targetLng) > tolerance
       ) {
         map.setView(propCenter);
       }
     }
-  }, [propCenter]); // Runs when propCenter changes
+  }, [propCenter]);
 
-  // Effect for flying to the selected user or landmark
   useEffect(() => {
     if (mapRef.current) {
       const map = mapRef.current;
@@ -123,58 +130,36 @@ const MapDisplayComponent: React.FC<MapDisplayProps> = ({
         map.flyTo(targetLatLng, Math.max(currentZoom, 15), { duration: 0.5 });
       }
     }
-  }, [selectedUser, selectedLandmark]); // Runs when selectedUser or selectedLandmark changes
+  }, [selectedUser, selectedLandmark]);
 
-  // CRUCIAL: Cleanup Leaflet map instance when the component unmounts
   useEffect(() => {
-    // This effect's cleanup function will run when MapDisplayComponent unmounts.
+    const mapInstance = mapRef.current;
     return () => {
-      if (mapRef.current && typeof mapRef.current.remove === 'function') {
-        mapRef.current.remove(); // Destroy the Leaflet map instance
+      if (mapInstance && typeof mapInstance.remove === 'function') {
+        mapInstance.remove();
       }
-      mapRef.current = null; // Clear the ref
+      mapRef.current = null;
     };
-  }, []); // Empty dependency array ensures this runs once on mount for setup, and cleanup on unmount.
+  }, []);
 
 
   if (!isClient) {
-    // Render a skeleton or null while waiting for client-side mount,
-    // as Leaflet requires a browser environment.
     return <Skeleton className="w-full h-full" />;
   }
 
   return (
      <MapContainer
-         // The 'center' prop for MapContainer sets the initial view.
-         // Subsequent view changes are handled by map.setView() or map.flyTo() in effects.
          center={currentMapCenter}
          zoom={13}
          style={{ height: '100%', width: '100%' }}
-         // whenCreated is called once the Leaflet map instance is ready.
-         whenCreated={(mapInstance) => {
-           mapRef.current = mapInstance;
-           // If propCenter was different from the initial mapInstance center, update it.
-           // This ensures the map reflects the latest propCenter after initialization.
-           if (propCenter) {
-                const currentViewCenter = mapInstance.getCenter();
-                let targetLat: number, targetLng: number;
-                if (Array.isArray(propCenter)) { [targetLat, targetLng] = propCenter as LatLngTuple;}
-                else { targetLat = propCenter.lat; targetLng = propCenter.lng; }
-                const tolerance = 0.00001;
-                if (Math.abs(currentViewCenter.lat - targetLat) > tolerance || Math.abs(currentViewCenter.lng - targetLng) > tolerance) {
-                    mapInstance.setView(propCenter);
-                }
-           }
-         }}
+         whenCreated={whenCreatedCb}
        >
        <TileLayer
          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
        />
-        {/* Attach the simplified event handler component */}
         <MapEventsHandler onMove={onMove} />
 
-       {/* Markers and Popups */}
        {users.map((user) => (
          <Marker
            key={`user-${user.id}`}
